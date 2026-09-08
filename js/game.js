@@ -61,6 +61,9 @@ const POSE_FLAP_FRAMES = 60;    // 落下中の開閉間隔。60フレーム = �
 const USE_SPRITES = !window.DROP_DELTA_PLAIN;
 const MODE_KEY = USE_SPRITES ? 'girls' : 'plain';
 
+// タイトル画面はキャラ版のみ。丸だけ版はすぐ始まる
+const TITLE = 'ドロップデルタもん';
+
 const sheet = new Image();
 let sheetReady = false;
 if (USE_SPRITES) {
@@ -163,6 +166,8 @@ const state = {
   pushEdge: 0,        // 盤面外へはみ出している向き（-1 左 / 0 内側 / 1 右）
   rawX: W / 2,        // クランプ前のポインタ位置
   locked: false,      // ポインタロック中か
+  started: !USE_SPRITES,   // タイトル画面を抜けたか
+  titleT: 0,          // タイトルの経過フレーム
 };
 
 const removeQueue = [];
@@ -233,7 +238,14 @@ function spawnBlocked(x) {
 //
 // 落下中のキャンディーが出現帯を通過している最中や、クールダウン中にクリックすると、
 // 以前は何も起きずに入力が消えていた。プレイヤーからは「クリックが効かない」としか見えない。
+function startGame() {
+  reset();                 // ここで初めてキャンディーのタイマーが動き出す
+  state.started = true;
+  state.dropped = false;
+}
+
 function requestDrop() {
+  if (!state.started) { startGame(); return; }
   if (state.gameOver) { reset(); return; }
   state.wantDropAt = performance.now();
   state.wantDropX = clamp(state.pointerX, R + 2, W - R - 2);
@@ -305,6 +317,7 @@ function updateCandy() {
 // ---- セリフ --------------------------------------------------------------
 
 function spawnBubble(x, y, id, big) {
+  if (!USE_SPRITES) return;   // 丸だけ版では喋らない。誰が喋っているのか分からない
   if (state.bubbles.length >= BUBBLE_MAX) return;
   const c = colorOf(id);
   state.bubbles.push({
@@ -662,6 +675,8 @@ function draw() {
   ctx.fillStyle = g;
   ctx.fillRect(0, 0, W, H);
 
+  if (!state.started) { drawTitle(); return; }
+
   // ゲームオーバーライン
   ctx.strokeStyle = state.overSince ? '#e05c92' : '#2e3448';
   ctx.lineWidth = 2;
@@ -791,6 +806,67 @@ function drawChain() {
   ctx.globalAlpha = 1;
 }
 
+// タイトル画面。3人が並んで開閉し続ける
+function drawTitle() {
+  const t = state.titleT;
+
+  ctx.save();
+  ctx.textAlign = 'center';
+
+  // タイトル。ゆっくり上下に揺れる
+  const bob = Math.sin(t / 34) * 4;
+  ctx.font = 'bold 44px system-ui, sans-serif';
+  ctx.lineWidth = 8;
+  ctx.strokeStyle = 'rgba(14,16,26,0.9)';
+  ctx.strokeText(TITLE, W / 2, 210 + bob);
+  const g = ctx.createLinearGradient(0, 180, 0, 225);
+  g.addColorStop(0, '#ffe6a3');
+  g.addColorStop(1, '#f492b8');
+  ctx.fillStyle = g;
+  ctx.fillText(TITLE, W / 2, 210 + bob);
+
+  // 3人を並べる。落下中と同じ間隔で開閉させる
+  const pose = Math.floor(t / POSE_FLAP_FRAMES) % 2 ? 'stand' : 'x';
+  const prev = pose === 'x' ? 'stand' : 'x';
+  const m = clamp((t % POSE_FLAP_FRAMES) / POSE_MORPH_FRAMES, 0, 1);
+  TYPES.forEach((ty, i) => {
+    const x = W / 2 + (i - 1) * 116;
+    const y = 380 + Math.sin(t / 30 + i * 1.1) * 7;
+    drawGirl(x, y, 0, 44, ty.id, 1, { pose, from: prev, morph: m });
+  });
+
+  // セリフを順番に見せる
+  TYPES.forEach((ty, i) => {
+    const phase = (t / 90) % 3;
+    const on = Math.floor(phase) === i;
+    if (!on) return;
+    ctx.globalAlpha = 0.9;
+    ctx.font = 'bold 17px system-ui, sans-serif';
+    ctx.lineWidth = 3.5;
+    ctx.strokeStyle = 'rgba(16,18,28,0.85)';
+    ctx.strokeText(ty.line, W / 2 + (i - 1) * 116, 316);
+    ctx.fillStyle = ty.hair;
+    ctx.fillText(ty.line, W / 2 + (i - 1) * 116, 316);
+    ctx.globalAlpha = 1;
+  });
+
+  // 点滅する案内
+  ctx.globalAlpha = 0.55 + Math.sin(t / 16) * 0.45;
+  ctx.fillStyle = '#e8ecf8';
+  ctx.font = 'bold 18px system-ui, sans-serif';
+  ctx.fillText('クリックでスタート', W / 2, 530);
+  ctx.globalAlpha = 1;
+
+  ctx.fillStyle = '#5a6280';
+  ctx.font = '12px system-ui, sans-serif';
+  ctx.fillText('同じ子が3人つながると消える　　連鎖でキャンディーをまとめて片付ける', W / 2, 578);
+  if (state.best > 0) {
+    ctx.fillText('BEST ' + state.best, W / 2, 600);
+  }
+
+  ctx.restore();
+}
+
 function drawHud() {
   ctx.globalAlpha = 1;
   ctx.fillStyle = '#e8ecf8';
@@ -876,6 +952,14 @@ function drawHud() {
 // ---- ループ --------------------------------------------------------------
 
 function tick() {
+  if (!state.started) {
+    // タイトル中は物理を止める。ここで進めるとキャンディーのタイマーも走ってしまう
+    state.titleT++;
+    draw();
+    requestAnimationFrame(tick);
+    return;
+  }
+
   if (!state.gameOver) {
     Engine.update(engine, 1000 / 60);
     state.frame++;
