@@ -60,11 +60,11 @@ const CANDY_REACH = 29;
 const CANDY_LAYER_CAP = 4;      // 連鎖で広がる巻き込み層の上限
 
 // 投入契機は経過時間。ドロップ回数ではない（連続発射を許可しているため）
-const CANDY_FIRST = 10000;      // 初回までの猶予 (ms)
-const CANDY_INTERVAL_MAX = 11000;
-const CANDY_INTERVAL_MIN = 4000;
-const CANDY_INTERVAL_STEP = 500;  // 1波ごとに間隔を詰める量
-const CANDY_COUNT_EVERY = 4;      // 何波ごとに1回の投入数を増やすか
+const CANDY_FIRST = 6000;       // 初回までの猶予 (ms)
+const CANDY_INTERVAL_MAX = 7000;
+const CANDY_INTERVAL_MIN = 2200;
+const CANDY_INTERVAL_STEP = 400;   // 1波ごとに間隔を詰める量
+const CANDY_COUNT_EVERY = 3;      // 何波ごとに1回の投入数を増やすか
 
 const candyInterval = wave =>
   Math.max(CANDY_INTERVAL_MIN, CANDY_INTERVAL_MAX - wave * CANDY_INTERVAL_STEP);
@@ -243,9 +243,35 @@ function findGroups(list) {
         stack.push(other);
       }
     }
-    if (group.length >= MATCH) groups.push(group);
+    if (group.length >= MATCH) groups.push(expandGroup(group));
   }
   return groups;
+}
+
+// 確定したグループを、静止判定を通っていない同種にも広げる。
+//
+// グループの発見は静止しているボディだけで行う（空中で消えるのを避けるため / 5.2）。
+// だがその条件のまま消すと、4体つながっていても1体がまだ揺れている場合に3体しか消えず、
+// 「つながっているのに消え残る」という理不尽が起きる。
+// 起点が既に MATCH 体以上の静止クラスタである以上、そこから同種でつながっている分は
+// 揺れていてもまとめて消す。
+function expandGroup(group) {
+  const all = girls();
+  const inGroup = new Set(group.map(b => b.id));
+  const stack = group.slice();
+
+  while (stack.length) {
+    const cur = stack.pop();
+    for (const other of all) {
+      if (inGroup.has(other.id)) continue;
+      if (other.plugin.type !== cur.plugin.type) continue;
+      if (!near(cur, other)) continue;
+      inGroup.add(other.id);
+      group.push(other);
+      stack.push(other);
+    }
+  }
+  return group;
 }
 
 // 消去確定したキャラ群を起点に、隣接するキャンディーを層状に辿る。
@@ -288,10 +314,15 @@ function scan() {
   state.chain = (now - state.lastClear < CHAIN_WINDOW) ? state.chain + 1 : 1;
   state.lastClear = now;
 
+  // expandGroup で広げた結果、別々のグループが同じボディを拾うことがある。
+  // 二重に消すとスコアが水増しされるため、ここで一意にする
   let cleared = 0;
   const clearedGirls = [];
+  const taken = new Set();
   for (const g of groups) {
     for (const b of g) {
+      if (taken.has(b.id)) continue;
+      taken.add(b.id);
       removeQueue.push(b);
       clearedGirls.push(b);
       state.effects.push({ x: b.position.x, y: b.position.y, type: b.plugin.type, t: 0 });
