@@ -16,14 +16,59 @@ const SPAWN_Y = 70;         // 待機キャラの出現高さ
 
 // ---- キャラ --------------------------------------------------------------
 
-// Phase 3 でスプライトに差し替える。色は img/girls.png の髪色に対応させてある。
+// 切り出し座標は設計書 8 の通り。body/hair は画像が読めるまでの代替色。
+//
+// 素材は SD 体型（頭が大きく体が小さい）に差し替え済み。
+// 等身が高いと 60px 程度では顔が潰れて種類を見分けられなかった。
+// 縦横比も改善し（棒立ち 1:2.9 → 1:1.3〜2.2）、円の当たり判定に載せても
+// 極端にはみ出さなくなったため、棒立ちも使えるようになった。
 const TYPES = [
-  { id: 'a', body: '#7ecb8f', hair: '#4da362' },
-  { id: 'b', body: '#7fd6d0', hair: '#4aa8b8' },
-  { id: 'c', body: '#f492b8', hair: '#e05c92' },
+  { id: 'a', body: '#7ecb8f', hair: '#4da362', line: 'ですわ～',
+    stand: [163, 23, 221, 494], x: [75, 531, 398, 456] },
+  { id: 'b', body: '#7fd6d0', hair: '#4aa8b8', line: '任せてくれ',
+    stand: [599, 27, 324, 492], x: [577, 542, 367, 446] },
+  { id: 'c', body: '#f492b8', hair: '#e05c92', line: 'デス！',
+    stand: [1051, 36, 363, 484], x: [1042, 546, 402, 443] },
 ];
 
-// Phase 1 の円は仮。棒立ちの絵は縦横比が約 1:2.9 と細長く、円1個では表現できない。
+// 消滅エフェクト
+const EFFECT_LIFE = 18;         // 消滅エフェクトの表示フレーム数
+const EFFECT_HOLD = 0.55;       // この割合までは不透明を保ち、以降で抜く
+
+// セリフのぽわぽわ
+const BUBBLE_LIFE = 70;         // セリフの表示フレーム数
+const BUBBLE_ON_CLEAR = 0.5;    // 消えた1体がセリフを出す確率
+const BUBBLE_IDLE = 0.0009;     // 静止中の1体が1フレームに喋る確率
+const BUBBLE_MAX = 14;          // 同時表示の上限。出しすぎると盤面が読めない
+
+const SPRITE_FIT = 1.12;        // 直径に対する描画高さの倍率
+
+// 開いたり閉じたり。
+//
+// 両ポーズを同じ高さで描くと、大の字は横に広く、棒立ちは細くなる。
+// 高さが変わらないまま幅だけが変わるので、そのまま「腕を開く / 閉じる」に見える。
+// 高さ基準にしているのは、円の当たり判定から縦にはみ出させないためでもある。
+//
+// 当たり判定はまだ変えていない（円のまま）。形も一緒に変えて周囲を押しのけるのは
+// 設計書 6 の内容で、Phase 2 で当たり判定を複合ボディにしてからでないと成立しない。
+const POSE_MORPH_FRAMES = 11;   // 切り替えにかけるフレーム数
+const POSE_CHANCE = 0.006;      // 静止中の1体が1回の走査で切り替わる確率
+const POSE_COOLDOWN = 1400;     // 同じ子が連続で動かないための間隔 (ms)
+const POSE_FLAP_FRAMES = 60;    // 落下中の開閉間隔。60フレーム = 約1秒ごとに切り替わる
+
+// 見た目のモード。plain.html が window.DROP_DELTA_PLAIN を立ててから読み込むと、
+// スプライトを使わず色の丸で描く。物理・判定・難易度は完全に同一。
+const USE_SPRITES = !window.DROP_DELTA_PLAIN;
+const MODE_KEY = USE_SPRITES ? 'girls' : 'plain';
+
+const sheet = new Image();
+let sheetReady = false;
+if (USE_SPRITES) {
+  sheet.onload = () => { sheetReady = true; };
+  sheet.src = './img/girls.png';
+}
+
+// Phase 1 の円は仮。当たり判定を絵の形（縦長／横広）に合わせるのは Phase 2。
 // Phase 2 で複合ボディに差し替える際、この R は「キャラの幅」の基準として引き継ぐ。
 const R = 31;               // 半径
 const REACH = 33;           // つながり判定の到達距離（重心間）
@@ -105,7 +150,7 @@ const state = {
   lastClear: -Infinity,
   chain: 0,
   score: 0,
-  best: Number(localStorage.getItem('dropdelta.best') || 0),
+  best: Number(localStorage.getItem('dropdelta.best.' + MODE_KEY) || 0),   // 自己ベストはモード別
   overSince: 0,
   gameOver: false,
   dropped: false,
@@ -114,6 +159,7 @@ const state = {
   nextCandyAt: 0,     // 次の投入時刻
   wantDropAt: 0,      // 保留中のクリック（0 なら無し）
   wantDropX: 0,
+  bubbles: [],        // 飛び散るセリフ
   pushEdge: 0,        // 盤面外へはみ出している向き（-1 左 / 0 内側 / 1 右）
   rawX: W / 2,        // クランプ前のポインタ位置
   locked: false,      // ポインタロック中か
@@ -155,6 +201,7 @@ function reset() {
   state.overSince = 0;
   state.gameOver = false;
   state.effects.length = 0;
+  state.bubbles.length = 0;
   state.wave = 0;
   state.wantDropAt = 0;
   state.nextCandyAt = performance.now() + CANDY_FIRST;
@@ -218,7 +265,10 @@ function drop() {
 
   const b = Bodies.circle(x, SPAWN_Y, R, Object.assign({}, PHYS, {
     label: 'girl',
-    plugin: { type: type.id, reach: REACH },
+    plugin: {
+      type: type.id, reach: REACH,
+      pose: "x", from: "x", morph: 1, poseAt: 0, flap: 0,   // morph 1 = 切り替え完了
+    },
   }));
   Composite.add(world, b);
   state.lastDrop = now;
@@ -250,6 +300,95 @@ function updateCandy() {
   }
   state.wave++;
   state.nextCandyAt = now + candyInterval(state.wave);
+}
+
+// ---- セリフ --------------------------------------------------------------
+
+function spawnBubble(x, y, id, big) {
+  if (state.bubbles.length >= BUBBLE_MAX) return;
+  const c = colorOf(id);
+  state.bubbles.push({
+    x, y,
+    text: c.line,
+    color: c.hair,
+    vx: (Math.random() - 0.5) * 0.9,
+    vy: -1.5 - Math.random() * 0.7,
+    rot: (Math.random() - 0.5) * 0.35,
+    size: big ? 19 : 14,
+    t: 0,
+  });
+}
+
+function updateBubbles() {
+  for (let i = state.bubbles.length - 1; i >= 0; i--) {
+    const b = state.bubbles[i];
+    b.x += b.vx;
+    b.y += b.vy;
+    b.vy *= 0.94;          // 浮き上がって減速する。ぽわぽわ
+    b.vx *= 0.97;
+    if (++b.t > BUBBLE_LIFE) state.bubbles.splice(i, 1);
+  }
+}
+
+function drawBubbles() {
+  for (const b of state.bubbles) {
+    const t = b.t / BUBBLE_LIFE;
+    // 出た瞬間だけ少し大きく、あとは徐々に消える
+    const pop = b.t < 6 ? 0.7 + (b.t / 6) * 0.45 : 1.15 - (b.t - 6) / BUBBLE_LIFE * 0.15;
+    ctx.save();
+    ctx.translate(b.x, b.y);
+    ctx.rotate(b.rot * (0.4 + t));
+    ctx.scale(pop, pop);
+    ctx.globalAlpha = t < 0.65 ? 1 : (1 - t) / 0.35;
+    ctx.font = 'bold ' + b.size + 'px system-ui, sans-serif';
+    ctx.textAlign = 'center';
+    ctx.lineWidth = 3.5;
+    ctx.strokeStyle = 'rgba(16,18,28,0.85)';
+    ctx.strokeText(b.text, 0, 0);
+    ctx.fillStyle = b.color;
+    ctx.fillText(b.text, 0, 0);
+    ctx.restore();
+  }
+  ctx.globalAlpha = 1;
+}
+
+// ---- ポーズ（開いたり閉じたり）------------------------------------------
+
+function updatePoses() {
+  const now = performance.now();
+  for (const b of girls()) {
+    const p = b.plugin;
+
+    // 切り替え中なら進める
+    if (p.morph < 1) {
+      p.morph = Math.min(1, p.morph + 1 / POSE_MORPH_FRAMES);
+      continue;
+    }
+
+    if (settled(b)) {
+      // たまにひとりごとを言う
+      if (Math.random() < BUBBLE_IDLE) {
+        spawnBubble(b.position.x, b.position.y - R * 0.6, p.type, false);
+      }
+      // 積まれて落ち着いた子は、たまに気まぐれに動く
+      if (now - p.poseAt < POSE_COOLDOWN) continue;
+      if (Math.random() >= POSE_CHANCE) continue;
+      togglePose(p, now);
+    } else {
+      // 落下中は等間隔でパタパタさせる。ランダムだと落ちている間に
+      // 一度も動かない子が出て、動く子と動かない子がまだらになる
+      if (++p.flap < POSE_FLAP_FRAMES) continue;
+      togglePose(p, now);
+    }
+  }
+}
+
+function togglePose(p, now) {
+  p.from = p.pose;
+  p.pose = p.pose === 'x' ? 'stand' : 'x';
+  p.morph = 0;
+  p.poseAt = now;
+  p.flap = 0;
 }
 
 // ---- つながり判定（設計書 5.1）-------------------------------------------
@@ -363,7 +502,11 @@ function scan() {
       taken.add(b.id);
       removeQueue.push(b);
       clearedGirls.push(b);
+      // 消える瞬間は全員が大の字になる。途中で閉じかけていても揃える
       state.effects.push({ x: b.position.x, y: b.position.y, type: b.plugin.type, t: 0 });
+      if (Math.random() < BUBBLE_ON_CLEAR) {
+        spawnBubble(b.position.x, b.position.y - R * 0.6, b.plugin.type, true);
+      }
       cleared++;
     }
   }
@@ -400,7 +543,7 @@ function checkGameOver() {
     state.gameOver = true;
     if (state.score > state.best) {
       state.best = state.score;
-      localStorage.setItem('dropdelta.best', String(state.best));
+      localStorage.setItem('dropdelta.best.' + MODE_KEY, String(state.best));
     }
   }
 }
@@ -409,13 +552,40 @@ function checkGameOver() {
 
 const colorOf = id => TYPES.find(t => t.id === id);
 
-function drawGirl(x, y, angle, r, id, alpha) {
+// 1枚分の描画。高さ基準で合わせる。
+// 幅基準にすると縦にはみ出して隣とめり込んで見える
+function blitPose(c, pose, r, alpha) {
+  if (alpha <= 0.01) return;
+  const [sx, sy, sw, sh] = c[pose];
+  const dh = r * 2 * SPRITE_FIT;
+  const dw = dh * (sw / sh);
+  ctx.globalAlpha = alpha;
+  ctx.drawImage(sheet, sx, sy, sw, sh, -dw / 2, -dh / 2, dw, dh);
+}
+
+// morph: { from, pose, morph } を渡すと開閉の途中を描く。省略時は大の字
+function drawGirl(x, y, angle, r, id, alpha, p) {
   const c = colorOf(id);
   ctx.save();
   ctx.translate(x, y);
   ctx.rotate(angle * 0.3);   // 実角度の 0.3 倍に抑制（設計書 4.2）
   ctx.globalAlpha = alpha;
 
+  if (sheetReady) {
+    const pose = p ? p.pose : 'x';
+    const t = p ? p.morph : 1;
+    if (t >= 1) {
+      blitPose(c, pose, r, alpha);
+    } else {
+      // 切り替え中はクロスフェード。絵が別物なので幅の補間ではつながらない
+      blitPose(c, p.from, r, alpha * (1 - t));
+      blitPose(c, pose, r, alpha * t);
+    }
+    ctx.restore();
+    return;
+  }
+
+  // 画像が読めるまでの代替表示
   ctx.fillStyle = c.body;
   ctx.beginPath();
   ctx.arc(0, 0, r, 0, Math.PI * 2);
@@ -530,17 +700,95 @@ function draw() {
   }
 
   for (const b of girls()) {
-    drawGirl(b.position.x, b.position.y, b.angle, R, b.plugin.type, 1);
+    drawGirl(b.position.x, b.position.y, b.angle, R, b.plugin.type, 1, b.plugin);
   }
 
-  // 消滅エフェクト
+  // 消滅エフェクト。キャラは大の字（drawGirl の既定ポーズ）で消える。
+  // 線形に薄くすると出た瞬間から半透明に見えるため、前半は濃いまま保って
+  // 後半で一気に抜く
   for (const e of state.effects) {
-    const t = e.t / 14;
-    if (e.candy) drawCandy(e.x, e.y, 0, CANDY_R * (1 + t * 0.9), 1 - t);
-    else drawGirl(e.x, e.y, 0, R * (1 + t * 0.9), e.type, 1 - t);
+    const t = e.t / EFFECT_LIFE;
+    const a = t < EFFECT_HOLD ? 1 : 1 - (t - EFFECT_HOLD) / (1 - EFFECT_HOLD);
+    if (e.candy) drawCandy(e.x, e.y, 0, CANDY_R * (1 + t * 0.9), a);
+    else drawGirl(e.x, e.y, 0, R * (1 + t * 0.9), e.type, a);
   }
+
+  drawBubbles();
 
   drawHud();
+}
+
+// 連鎖表示。数が伸びるほど派手になる。
+// 段階を「大きさ」「色」「縁取り」「発光」「揺れ」の順で足していき、
+// 上に行くほど要素が増えるようにしている
+const CHAIN_TIERS = [
+  { at: 2, size: 30, fill: '#f6c86a', suffix: '' },
+  { at: 3, size: 38, fill: '#ffd24a', suffix: '!' },
+  { at: 4, size: 46, fill: '#ffb03a', suffix: '!' },
+  { at: 5, size: 54, fill: '#ff8f4d', suffix: '!!' },
+  { at: 6, size: 62, fill: '#ff6fa5', suffix: '!!' },
+  { at: 7, size: 70, fill: '#e879f9', suffix: '!!!' },
+];
+
+function chainTier(n) {
+  let t = CHAIN_TIERS[0];
+  for (const c of CHAIN_TIERS) if (n >= c.at) t = c;
+  return t;
+}
+
+function drawChain() {
+  if (state.chain < 2) return;
+  const age = performance.now() - state.lastClear;
+  if (age > CHAIN_WINDOW) return;
+
+  const n = state.chain;
+  const tier = chainTier(n);
+  const t = age / CHAIN_WINDOW;
+
+  // 出た瞬間に弾んで、最後に消える
+  const pop = age < 130 ? 0.55 + (age / 130) * 0.55 : 1.1 - (age - 130) / CHAIN_WINDOW * 0.1;
+  const alpha = t < 0.7 ? 1 : (1 - t) / 0.3;
+
+  // 高連鎖ほど揺れる
+  const shake = n >= 6 ? (Math.random() - 0.5) * (n - 5) * 1.6 : 0;
+
+  ctx.save();
+  ctx.globalAlpha = alpha;
+  ctx.translate(W / 2 + shake, H / 2 - 40 + shake * 0.5);
+  ctx.scale(pop, pop);
+  ctx.textAlign = 'center';
+  ctx.font = 'bold ' + tier.size + 'px system-ui, sans-serif';
+
+  const text = n + ' CHAIN' + tier.suffix;
+
+  // 5連鎖以上は発光
+  if (n >= 5) {
+    ctx.shadowColor = tier.fill;
+    ctx.shadowBlur = 18 + (n - 4) * 6;
+  }
+  // 4連鎖以上は縁取りを厚くして重量感を出す
+  ctx.lineWidth = n >= 4 ? 7 : 4;
+  ctx.strokeStyle = 'rgba(14,16,26,0.9)';
+  ctx.strokeText(text, 0, 0);
+
+  ctx.shadowBlur = 0;
+  ctx.fillStyle = tier.fill;
+  ctx.fillText(text, 0, 0);
+
+  // 7連鎖以上はきらめきを散らす
+  if (n >= 7) {
+    ctx.fillStyle = '#fff6c2';
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2 + age / 200;
+      const rr = tier.size * (1.1 + 0.25 * Math.sin(age / 90 + i));
+      const s = 2.2 + Math.sin(age / 60 + i) * 1.2;
+      ctx.beginPath();
+      ctx.arc(Math.cos(a) * rr * 1.7, Math.sin(a) * rr * 0.55, Math.max(0.5, s), 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+  ctx.restore();
+  ctx.globalAlpha = 1;
 }
 
 function drawHud() {
@@ -607,13 +855,7 @@ function drawHud() {
     }
   }
 
-  if (state.chain > 1 && performance.now() - state.lastClear < CHAIN_WINDOW) {
-    ctx.globalAlpha = 1;
-    ctx.textAlign = 'center';
-    ctx.fillStyle = '#f6c86a';
-    ctx.font = 'bold 30px system-ui, sans-serif';
-    ctx.fillText(state.chain + ' CHAIN', W / 2, H / 2 - 40);
-  }
+  drawChain();
 
   if (state.gameOver) {
     ctx.globalAlpha = 1;
@@ -640,6 +882,8 @@ function tick() {
 
     updatePendingDrop();
     updateCandy();
+    updatePoses();
+    updateBubbles();
 
     if (state.frame % SCAN_INTERVAL === 0) {
       scan();
@@ -648,7 +892,7 @@ function tick() {
   }
 
   for (let i = state.effects.length - 1; i >= 0; i--) {
-    if (++state.effects[i].t > 14) state.effects.splice(i, 1);
+    if (++state.effects[i].t > EFFECT_LIFE) state.effects.splice(i, 1);
   }
 
   draw();
