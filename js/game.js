@@ -589,19 +589,24 @@ function tick() {
 
 // ---- 入力 ----------------------------------------------------------------
 
+// 盤面座標へ変換したうえで、ドロップ可能な範囲にクランプする。
+// canvas は縦画面比を保つため左右に余白（レターボックス）ができる。そこを死に領域に
+// すると、端に置きたいときほどクリックが効かなくなって操作感が最悪になる。
+// 入力はページ全体で受け、はみ出した分は端に丸める。
 function toBoardX(clientX) {
   const rect = canvas.getBoundingClientRect();
-  return (clientX - rect.left) / rect.width * W;
+  const raw = (clientX - rect.left) / rect.width * W;
+  return clamp(raw, R + 2, W - R - 2);
 }
 
-canvas.addEventListener('pointermove', e => {
+window.addEventListener('pointermove', e => {
   state.pointerX = toBoardX(e.clientX);
 });
-canvas.addEventListener('pointerdown', e => {
+window.addEventListener('pointerdown', e => {
   state.pointerX = toBoardX(e.clientX);
   e.preventDefault();
 });
-canvas.addEventListener('pointerup', e => {
+window.addEventListener('pointerup', e => {
   state.pointerX = toBoardX(e.clientX);
   drop();
   e.preventDefault();
