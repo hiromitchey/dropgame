@@ -1,6 +1,6 @@
-// drop delta - Phase 1
-// 単純な円が落ちて、同種3つ以上つながると消える。連鎖まで。
-// 設計書 doc/bp.md 参照。複合ボディ・キャラ画像・キャンディーは Phase 2 以降。
+// drop delta - Phase 1 + 5
+// 落下・堆積・同種3体消去・連鎖・キャンディー（お邪魔）まで。
+// 設計書 doc/bp.md 参照。複合ボディ・キャラ画像・ポーズ切り替えは Phase 2〜4。
 
 'use strict';
 
@@ -23,10 +23,13 @@ const TYPES = [
   { id: 'c', body: '#f492b8', hair: '#e05c92' },
 ];
 
-const R = 23;               // 半径
-const REACH = 25;           // つながり判定の到達距離（重心間）
+// Phase 1 の円は仮。棒立ちの絵は縦横比が約 1:2.9 と細長く、円1個では表現できない。
+// Phase 2 で複合ボディに差し替える際、この R は「キャラの幅」の基準として引き継ぐ。
+const R = 31;               // 半径
+const REACH = 33;           // つながり判定の到達距離（重心間）
 const MATCH = 3;            // 消去に必要な数
-const MAX_BODIES = 100;     // 盤面上限
+const MAX_BODIES = 200;     // 盤面上限。負荷の安全弁であり難易度装置ではない。
+                            // ゲームオーバーラインより先に効くと負けなくなる
 
 // ---- 物理パラメータ（設計書 4.2）----------------------------------------
 
@@ -48,6 +51,33 @@ const DROP_COOLDOWN = 100;      // 出現位置の重なり事故を防ぐ最小
 const OVER_HOLD = 1500;         // ライン超過がこの時間続いたらゲームオーバー
 
 const BASE_SCORE = 40;
+const CANDY_SCORE = 15;
+
+// ---- キャンディー（設計書 3.2 / 7）--------------------------------------
+
+const CANDY_R = 27;             // キャラとほぼ同大。盤面を強く圧迫する
+const CANDY_REACH = 29;
+const CANDY_LAYER_CAP = 4;      // 連鎖で広がる巻き込み層の上限
+
+// 投入契機は経過時間。ドロップ回数ではない（連続発射を許可しているため）
+const CANDY_FIRST = 10000;      // 初回までの猶予 (ms)
+const CANDY_INTERVAL_MAX = 11000;
+const CANDY_INTERVAL_MIN = 4000;
+const CANDY_INTERVAL_STEP = 500;  // 1波ごとに間隔を詰める量
+const CANDY_COUNT_EVERY = 4;      // 何波ごとに1回の投入数を増やすか
+
+const candyInterval = wave =>
+  Math.max(CANDY_INTERVAL_MIN, CANDY_INTERVAL_MAX - wave * CANDY_INTERVAL_STEP);
+const candyCount = wave => 1 + Math.floor(wave / CANDY_COUNT_EVERY);
+
+// キャンディーは転がらず「詰まる」（設計書 3.2）
+const CANDY_PHYS = {
+  restitution: 0.02,
+  friction: 0.9,
+  frictionStatic: 1.0,
+  frictionAir: 0.02,
+  density: 0.0014,
+};
 
 const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 
@@ -74,6 +104,8 @@ const state = {
   gameOver: false,
   dropped: false,
   effects: [],
+  wave: 0,            // キャンディーを何回投入したか
+  nextCandyAt: 0,     // 次の投入時刻
 };
 
 const removeQueue = [];
@@ -111,6 +143,8 @@ function reset() {
   state.overSince = 0;
   state.gameOver = false;
   state.effects.length = 0;
+  state.wave = 0;
+  state.nextCandyAt = performance.now() + CANDY_FIRST;
   removeQueue.length = 0;
 }
 
@@ -120,10 +154,19 @@ function girls() {
   return Composite.allBodies(world).filter(b => b.plugin && b.plugin.type);
 }
 
+function candies() {
+  return Composite.allBodies(world).filter(b => b.plugin && b.plugin.candy);
+}
+
+// 盤面に存在する全ピース。上限管理とゲームオーバー判定はこちらを見る
+function pieces() {
+  return Composite.allBodies(world).filter(b => b.plugin && (b.plugin.type || b.plugin.candy));
+}
+
 function spawnBlocked(x) {
   // 出現位置に前のキャラがまだ居るなら撃たせない（重なりによる吹き飛び防止）
   const region = { min: { x: x - R, y: SPAWN_Y - R }, max: { x: x + R, y: SPAWN_Y + R } };
-  return Query.region(girls(), region).length > 0;
+  return Query.region(pieces(), region).length > 0;
 }
 
 function drop() {
@@ -133,7 +176,7 @@ function drop() {
 
   const x = clamp(state.pointerX, R + 2, W - R - 2);
   if (spawnBlocked(x)) return;
-  if (girls().length >= MAX_BODIES) return;
+  if (pieces().length >= MAX_BODIES) return;
 
   const type = state.queue.shift();
   fillQueue();
@@ -145,6 +188,30 @@ function drop() {
   Composite.add(world, b);
   state.lastDrop = now;
   state.dropped = true;
+}
+
+// ---- キャンディー投入（設計書 7）----------------------------------------
+
+function spawnCandy() {
+  const x = clamp(40 + Math.random() * (W - 80), CANDY_R + 2, W - CANDY_R - 2);
+  const b = Bodies.circle(x, 34, CANDY_R, Object.assign({}, CANDY_PHYS, {
+    label: 'candy',
+    plugin: { candy: true, reach: CANDY_REACH },
+  }));
+  Composite.add(world, b);
+}
+
+function updateCandy() {
+  const now = performance.now();
+  if (now < state.nextCandyAt) return;
+
+  const n = candyCount(state.wave);
+  for (let i = 0; i < n; i++) {
+    if (pieces().length >= MAX_BODIES) break;
+    spawnCandy();
+  }
+  state.wave++;
+  state.nextCandyAt = now + candyInterval(state.wave);
 }
 
 // ---- つながり判定（設計書 5.1）-------------------------------------------
@@ -181,6 +248,32 @@ function findGroups(list) {
   return groups;
 }
 
+// 消去確定したキャラ群を起点に、隣接するキャンディーを層状に辿る。
+// 辿る対象はキャンディーのみ。間にキャラが挟まっていればそこで打ち切られる（設計書 3.2）
+function collectCandy(clearedGirls, layers) {
+  if (layers < 1) return [];
+  const pool = candies();
+  if (!pool.length) return [];
+
+  const taken = new Set();
+  const swept = [];
+  let frontier = clearedGirls;
+
+  for (let L = 0; L < layers; L++) {
+    const next = [];
+    for (const c of pool) {
+      if (taken.has(c.id)) continue;
+      if (!frontier.some(f => near(f, c))) continue;
+      taken.add(c.id);
+      next.push(c);
+      swept.push(c);
+    }
+    if (!next.length) break;   // これ以上広がらない
+    frontier = next;
+  }
+  return swept;
+}
+
 function scan() {
   const now = performance.now();
   if (now < state.recheckAt) return;
@@ -196,15 +289,25 @@ function scan() {
   state.lastClear = now;
 
   let cleared = 0;
+  const clearedGirls = [];
   for (const g of groups) {
     for (const b of g) {
       removeQueue.push(b);
+      clearedGirls.push(b);
       state.effects.push({ x: b.position.x, y: b.position.y, type: b.plugin.type, t: 0 });
       cleared++;
     }
   }
 
-  state.score += cleared * BASE_SCORE * state.chain;
+  // 巻き込まれるキャンディー。連鎖数だけ層が広がる（設計書 3.2）
+  const swept = collectCandy(clearedGirls, Math.min(state.chain, CANDY_LAYER_CAP));
+  for (const c of swept) {
+    removeQueue.push(c);
+    state.effects.push({ x: c.position.x, y: c.position.y, candy: true, t: 0 });
+  }
+
+  state.score += cleared * BASE_SCORE * state.chain
+               + swept.length * CANDY_SCORE * state.chain;
   state.recheckAt = now + RECHECK_DELAY;
 }
 
@@ -220,7 +323,7 @@ Events.on(engine, 'afterUpdate', () => {
 function checkGameOver() {
   const now = performance.now();
   // 判定対象は静止しているボディのみ。落下中を含めると自分の弾で誤爆する
-  const over = girls().some(b => settled(b) && b.position.y < LINE_Y);
+  const over = pieces().some(b => settled(b) && b.position.y < LINE_Y);
 
   if (!over) { state.overSince = 0; return; }
   if (!state.overSince) { state.overSince = now; return; }
@@ -275,6 +378,43 @@ function drawGirl(x, y, angle, r, id, alpha) {
   ctx.restore();
 }
 
+function drawCandy(x, y, angle, r, alpha) {
+  ctx.save();
+  ctx.translate(x, y);
+  ctx.rotate(angle);
+  ctx.globalAlpha = alpha;
+
+  // 包み（左右のひねり）。物理半径 r をはみ出さない範囲に収める。
+  // 大きく描くと見た目と当たり判定がズレて、置ける場所が読めなくなる
+  ctx.fillStyle = '#8d7fb5';
+  ctx.beginPath();
+  ctx.moveTo(-r * 1.0, -r * 0.62);
+  ctx.lineTo(-r * 0.45, 0);
+  ctx.lineTo(-r * 1.0, r * 0.62);
+  ctx.closePath();
+  ctx.fill();
+  ctx.beginPath();
+  ctx.moveTo(r * 1.0, -r * 0.62);
+  ctx.lineTo(r * 0.45, 0);
+  ctx.lineTo(r * 1.0, r * 0.62);
+  ctx.closePath();
+  ctx.fill();
+
+  // 本体
+  ctx.fillStyle = '#b6a7e0';
+  ctx.beginPath();
+  ctx.arc(0, 0, r * 0.95, 0, Math.PI * 2);
+  ctx.fill();
+
+  // ハイライト
+  ctx.fillStyle = 'rgba(255,255,255,0.35)';
+  ctx.beginPath();
+  ctx.arc(-r * 0.3, -r * 0.32, r * 0.28, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.restore();
+}
+
 function draw() {
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   const g = ctx.createLinearGradient(0, 0, 0, H);
@@ -305,6 +445,10 @@ function draw() {
     drawGirl(x, SPAWN_Y, 0, R, state.queue[0].id, 1);
   }
 
+  for (const b of candies()) {
+    drawCandy(b.position.x, b.position.y, b.angle, CANDY_R, 1);
+  }
+
   for (const b of girls()) {
     drawGirl(b.position.x, b.position.y, b.angle, R, b.plugin.type, 1);
   }
@@ -312,7 +456,8 @@ function draw() {
   // 消滅エフェクト
   for (const e of state.effects) {
     const t = e.t / 14;
-    drawGirl(e.x, e.y, 0, R * (1 + t * 0.9), e.type, 1 - t);
+    if (e.candy) drawCandy(e.x, e.y, 0, CANDY_R * (1 + t * 0.9), 1 - t);
+    else drawGirl(e.x, e.y, 0, R * (1 + t * 0.9), e.type, 1 - t);
   }
 
   drawHud();
@@ -334,6 +479,26 @@ function drawHud() {
   ctx.fillText('NEXT', W - 16, 24);
   for (let i = 1; i < 3; i++) {
     drawGirl(W - 30 - (i - 1) * 44, 46, 0, 15, state.queue[i].id, 0.9 - (i - 1) * 0.35);
+  }
+
+  // キャンディー予告。残り時間と来る数（設計書 7「予告なしは理不尽」）
+  if (!state.gameOver) {
+    const left = Math.max(0, state.nextCandyAt - performance.now());
+    const span = candyInterval(state.wave);
+    const n = candyCount(state.wave);
+    const imminent = left < 3000;
+
+    ctx.textAlign = 'left';
+    ctx.fillStyle = imminent ? '#c9a3f0' : '#5a6280';
+    ctx.font = '12px system-ui, sans-serif';
+    ctx.fillText('CANDY x' + n + '  ' + (left / 1000).toFixed(1) + 's', 16, 82);
+
+    // 残り時間バー
+    const bw = 96, bh = 4;
+    ctx.fillStyle = '#252a3c';
+    ctx.fillRect(16, 90, bw, bh);
+    ctx.fillStyle = imminent ? '#b6a7e0' : '#454d6b';
+    ctx.fillRect(16, 90, bw * clamp(1 - left / span, 0, 1), bh);
   }
 
   // 操作ヒント。最初のドロップまで
@@ -374,6 +539,8 @@ function tick() {
   if (!state.gameOver) {
     Engine.update(engine, 1000 / 60);
     state.frame++;
+
+    updateCandy();
 
     if (state.frame % SCAN_INTERVAL === 0) {
       scan();
