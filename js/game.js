@@ -109,6 +109,7 @@ const state = {
   nextCandyAt: 0,     // 次の投入時刻
   wantDropAt: 0,      // 保留中のクリック（0 なら無し）
   wantDropX: 0,
+  pushEdge: 0,        // 盤面外へはみ出している向き（-1 左 / 0 内側 / 1 右）
 };
 
 const removeQueue = [];
@@ -493,6 +494,17 @@ function draw() {
   ctx.stroke();
   ctx.setLineDash([]);
 
+  // 盤面の外へカーソルがはみ出している間、その端を光らせる。
+  // カーソルを消しているので、これが無いと「動かしているのに反応しない」ようにしか見えない
+  if (!state.gameOver && state.pushEdge) {
+    const x0 = state.pushEdge < 0 ? 0 : W;
+    const g2 = ctx.createLinearGradient(x0, 0, x0 + state.pushEdge * 46, 0);
+    g2.addColorStop(0, 'rgba(246,200,106,0.30)');
+    g2.addColorStop(1, 'rgba(246,200,106,0)');
+    ctx.fillStyle = g2;
+    ctx.fillRect(state.pushEdge < 0 ? 0 : W - 46, 0, 46, H);
+  }
+
   // 落下ガイド + 待機キャラ
   if (!state.gameOver) {
     const x = clamp(state.pointerX, R + 2, W - R - 2);
@@ -626,7 +638,13 @@ function tick() {
 function toBoardX(clientX) {
   const rect = canvas.getBoundingClientRect();
   const raw = (clientX - rect.left) / rect.width * W;
-  return clamp(raw, R + 2, W - R - 2);
+
+  // カーソルは非表示にしているため、盤面外へはみ出したことを別の形で伝える必要がある。
+  // はみ出した向きを覚えておき、描画側でその端を光らせる（drawEdgePush）
+  const lo = R + 2, hi = W - R - 2;
+  state.pushEdge = raw < lo ? -1 : raw > hi ? 1 : 0;
+
+  return clamp(raw, lo, hi);
 }
 
 window.addEventListener('pointermove', e => {

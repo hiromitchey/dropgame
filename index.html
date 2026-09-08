@@ -15,6 +15,9 @@
     -webkit-user-select: none;
     user-select: none;
     font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    /* キャラ自体がカーソルの代わりになる。canvas の内外でカーソルの有無が
+       変わると、枠からはみ出した瞬間に挙動が変わったように見えるため統一する */
+    cursor: none;
   }
   #wrap {
     height: 100%;
