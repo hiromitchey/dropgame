@@ -28,16 +28,21 @@ const TYPES = [
 const R = 31;               // 半径
 const REACH = 33;           // つながり判定の到達距離（重心間）
 const MATCH = 3;            // 消去に必要な数
+const NEXT_SHOWN = 3;       // NEXT で見せる手数
 const MAX_BODIES = 200;     // 盤面上限。負荷の安全弁であり難易度装置ではない。
                             // ゲームオーバーラインより先に効くと負けなくなる
 
 // ---- 物理パラメータ（設計書 4.2）----------------------------------------
 
+// ふわっと落とす。重力を弱め、空気抵抗を上げて終端速度を下げている。
+// 落下が速いと「物を投げ落としている」感触になり、キャラが物として扱われて見える
+const GRAVITY = 0.72;       // 盤面の高さを落ちきるのに約2.0秒（変更前は1.37秒）
+
 const PHYS = {
   restitution: 0.15,
   friction: 0.55,
   frictionStatic: 0.6,
-  frictionAir: 0.015,
+  frictionAir: 0.026,
   density: 0.001,
 };
 
@@ -76,7 +81,7 @@ const CANDY_PHYS = {
   restitution: 0.02,
   friction: 0.9,
   frictionStatic: 1.0,
-  frictionAir: 0.02,
+  frictionAir: 0.034,
   density: 0.0014,
 };
 
@@ -85,7 +90,7 @@ const clamp = (v, lo, hi) => (v < lo ? lo : v > hi ? hi : v);
 // ---- 状態 ----------------------------------------------------------------
 
 const engine = Engine.create();
-engine.gravity.y = 1.0;
+engine.gravity.y = GRAVITY;
 const world = engine.world;
 
 const canvas = document.getElementById('cv');
@@ -132,7 +137,8 @@ function randomType() {
 }
 
 function fillQueue() {
-  while (state.queue.length < 3) state.queue.push(randomType());
+  // 先頭が今持っているキャラ。残りが NEXT として見える分
+  while (state.queue.length < 1 + NEXT_SHOWN) state.queue.push(randomType());
 }
 
 function reset() {
@@ -548,12 +554,18 @@ function drawHud() {
   ctx.font = '12px system-ui, sans-serif';
   ctx.fillText('BEST ' + state.best, 16, 56);
 
-  // NEXT
-  ctx.textAlign = 'right';
-  ctx.fillText('NEXT', W - 16, 24);
-  for (let i = 1; i < 3; i++) {
-    drawGirl(W - 30 - (i - 1) * 44, 46, 0, 15, state.queue[i].id, 0.9 - (i - 1) * 0.35);
+  // NEXT。近い手ほど大きく・濃く描き、順番が一目で分かるようにする。
+  // 待機キャラの帯（SPAWN_Y ± R = 39〜101）より上に置く。重なると手前のキャラが読めない
+  // 直近の手をラベル寄り（左）に置く。左から右へ読む順序と手番の順序を一致させる
+  for (let i = 1; i <= NEXT_SHOWN; i++) {
+    const k = i - 1;
+    const x = W - 28 - (NEXT_SHOWN - 1 - k) * 36;
+    drawGirl(x, 22, 0, 14 - k * 2.2, state.queue[i].id, 0.95 - k * 0.22);
   }
+  ctx.textAlign = 'right';
+  ctx.fillStyle = '#5a6280';
+  ctx.font = '11px system-ui, sans-serif';
+  ctx.fillText('NEXT', W - 28 - NEXT_SHOWN * 36 + 4, 26);
 
   // キャンディー予告。残り時間と来る数（設計書 7「予告なしは理不尽」）
   if (!state.gameOver) {
@@ -575,22 +587,24 @@ function drawHud() {
     ctx.fillRect(16, 90, bw * clamp(1 - left / span, 0, 1), bh);
   }
 
-  // 操作ヒント。最初のドロップまで
-  if (!state.dropped) {
+  // 案内はゲームオーバーラインより上に出す。
+  // ここが埋まったらゲームオーバーなので、定義上キャラと重なることがない。
+  // 画面下に置くと積み上がった山に文字が被って読めなくなる
+  if (!state.gameOver) {
     ctx.textAlign = 'center';
     ctx.fillStyle = '#4a5068';
-    ctx.font = '13px system-ui, sans-serif';
-    ctx.fillText('動かす: マウス / 指　　落とす: クリック / タップ', W / 2, H - 40);
-  }
 
-  // ポインタが固定されていない間の案内。
-  // 固定していないとカーソルがブラウザの枠外へ出てしまい、そこでのクリックが
-  // 他のウィンドウに入って集中が切れる
-  if (state.dropped && !state.locked && !state.gameOver) {
-    ctx.textAlign = 'center';
-    ctx.fillStyle = '#4a5068';
-    ctx.font = '12px system-ui, sans-serif';
-    ctx.fillText('クリックでマウスを画面内に固定　（Esc で解除）', W / 2, H - 20);
+    if (!state.dropped) {
+      ctx.font = '13px system-ui, sans-serif';
+      ctx.fillText('動かす: マウス / 指　　落とす: クリック / タップ', W / 2, LINE_Y - 34);
+    }
+
+    // ポインタが固定されていないと、カーソルがブラウザの枠外へ出てしまい、
+    // そこでのクリックが他のウィンドウに入って集中が切れる
+    if (!state.locked) {
+      ctx.font = '12px system-ui, sans-serif';
+      ctx.fillText('クリックでマウスを画面内に固定　（Esc で解除）', W / 2, LINE_Y - 14);
+    }
   }
 
   if (state.chain > 1 && performance.now() - state.lastClear < CHAIN_WINDOW) {
