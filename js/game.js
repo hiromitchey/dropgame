@@ -48,6 +48,7 @@ const SCAN_INTERVAL = 10;       // 何フレームに1回走査するか
 const RECHECK_DELAY = 380;      // 消去後、再判定までの待機 (ms)
 const CHAIN_WINDOW = 1000;      // 連鎖とみなす間隔 (ms)
 const DROP_COOLDOWN = 100;      // 出現位置の重なり事故を防ぐ最小限
+const DROP_BUFFER = 450;        // 撃てない瞬間のクリックを保留しておく時間 (ms)
 const OVER_HOLD = 1500;         // ライン超過がこの時間続いたらゲームオーバー
 
 const BASE_SCORE = 40;
@@ -106,6 +107,8 @@ const state = {
   effects: [],
   wave: 0,            // キャンディーを何回投入したか
   nextCandyAt: 0,     // 次の投入時刻
+  wantDropAt: 0,      // 保留中のクリック（0 なら無し）
+  wantDropX: 0,
 };
 
 const removeQueue = [];
@@ -144,6 +147,7 @@ function reset() {
   state.gameOver = false;
   state.effects.length = 0;
   state.wave = 0;
+  state.wantDropAt = 0;
   state.nextCandyAt = performance.now() + CANDY_FIRST;
   removeQueue.length = 0;
 }
@@ -169,12 +173,34 @@ function spawnBlocked(x) {
   return Query.region(pieces(), region).length > 0;
 }
 
+// クリックを受け付ける入口。撃てない瞬間でも取りこぼさず、少しの間だけ発射を保留する。
+//
+// 落下中のキャンディーが出現帯を通過している最中や、クールダウン中にクリックすると、
+// 以前は何も起きずに入力が消えていた。プレイヤーからは「クリックが効かない」としか見えない。
+function requestDrop() {
+  if (state.gameOver) { reset(); return; }
+  state.wantDropAt = performance.now();
+  state.wantDropX = clamp(state.pointerX, R + 2, W - R - 2);
+  drop();
+}
+
+// 保留中の発射を毎フレーム試す
+function updatePendingDrop() {
+  if (!state.wantDropAt) return;
+  if (performance.now() - state.wantDropAt > DROP_BUFFER) {
+    state.wantDropAt = 0;   // 諦める。これ以上待つと意図しない位置に落ちる
+    return;
+  }
+  drop();
+}
+
 function drop() {
   if (state.gameOver) { reset(); return; }
   const now = performance.now();
   if (now - state.lastDrop < DROP_COOLDOWN) return;
 
-  const x = clamp(state.pointerX, R + 2, W - R - 2);
+  // 保留中ならクリック時点の x を使う。待っている間にカーソルが動いても狙い通りに落ちる
+  const x = state.wantDropAt ? state.wantDropX : clamp(state.pointerX, R + 2, W - R - 2);
   if (spawnBlocked(x)) return;
   if (pieces().length >= MAX_BODIES) return;
 
@@ -187,6 +213,7 @@ function drop() {
   }));
   Composite.add(world, b);
   state.lastDrop = now;
+  state.wantDropAt = 0;
   state.dropped = true;
 }
 
@@ -194,7 +221,9 @@ function drop() {
 
 function spawnCandy() {
   const x = clamp(40 + Math.random() * (W - 80), CANDY_R + 2, W - CANDY_R - 2);
-  const b = Bodies.circle(x, 34, CANDY_R, Object.assign({}, CANDY_PHYS, {
+  // 画面外の上から入れる。キャラの出現帯（SPAWN_Y ± R）に居座ると、その真下の x で
+  // プレイヤーが撃てなくなる
+  const b = Bodies.circle(x, -CANDY_R - 12, CANDY_R, Object.assign({}, CANDY_PHYS, {
     label: 'candy',
     plugin: { candy: true, reach: CANDY_REACH },
   }));
@@ -571,6 +600,7 @@ function tick() {
     Engine.update(engine, 1000 / 60);
     state.frame++;
 
+    updatePendingDrop();
     updateCandy();
 
     if (state.frame % SCAN_INTERVAL === 0) {
@@ -608,11 +638,11 @@ window.addEventListener('pointerdown', e => {
 });
 window.addEventListener('pointerup', e => {
   state.pointerX = toBoardX(e.clientX);
-  drop();
+  requestDrop();
   e.preventDefault();
 });
 window.addEventListener('keydown', e => {
-  if (e.code === 'Space') { drop(); e.preventDefault(); }
+  if (e.code === "Space") { requestDrop(); e.preventDefault(); }
 });
 
 // ---- キャンバス解像度 ----------------------------------------------------
