@@ -110,6 +110,8 @@ const state = {
   wantDropAt: 0,      // 保留中のクリック（0 なら無し）
   wantDropX: 0,
   pushEdge: 0,        // 盤面外へはみ出している向き（-1 左 / 0 内側 / 1 右）
+  rawX: W / 2,        // クランプ前のポインタ位置
+  locked: false,      // ポインタロック中か
 };
 
 const removeQueue = [];
@@ -581,6 +583,16 @@ function drawHud() {
     ctx.fillText('動かす: マウス / 指　　落とす: クリック / タップ', W / 2, H - 40);
   }
 
+  // ポインタが固定されていない間の案内。
+  // 固定していないとカーソルがブラウザの枠外へ出てしまい、そこでのクリックが
+  // 他のウィンドウに入って集中が切れる
+  if (state.dropped && !state.locked && !state.gameOver) {
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#4a5068';
+    ctx.font = '12px system-ui, sans-serif';
+    ctx.fillText('クリックでマウスを画面内に固定　（Esc で解除）', W / 2, H - 20);
+  }
+
   if (state.chain > 1 && performance.now() - state.lastClear < CHAIN_WINDOW) {
     ctx.globalAlpha = 1;
     ctx.textAlign = 'center';
@@ -635,32 +647,74 @@ function tick() {
 // canvas は縦画面比を保つため左右に余白（レターボックス）ができる。そこを死に領域に
 // すると、端に置きたいときほどクリックが効かなくなって操作感が最悪になる。
 // 入力はページ全体で受け、はみ出した分は端に丸める。
-function toBoardX(clientX) {
-  const rect = canvas.getBoundingClientRect();
-  const raw = (clientX - rect.left) / rect.width * W;
+const DROP_LO = R + 2;
+const DROP_HI = W - R - 2;
+const OVERRUN = 40;   // 端を越えて動かせる余地。押し当てている感触のために少しだけ残す
 
-  // カーソルは非表示にしているため、盤面外へはみ出したことを別の形で伝える必要がある。
-  // はみ出した向きを覚えておき、描画側でその端を光らせる（drawEdgePush）
-  const lo = R + 2, hi = W - R - 2;
-  state.pushEdge = raw < lo ? -1 : raw > hi ? 1 : 0;
-
-  return clamp(raw, lo, hi);
+// 盤面外へどれだけはみ出しているかを保持し、描画側で端を光らせる（カーソルは非表示のため）
+function applyRawX(raw) {
+  state.rawX = clamp(raw, DROP_LO - OVERRUN, DROP_HI + OVERRUN);
+  state.pushEdge = state.rawX < DROP_LO ? -1 : state.rawX > DROP_HI ? 1 : 0;
+  state.pointerX = clamp(state.rawX, DROP_LO, DROP_HI);
 }
 
-window.addEventListener('pointermove', e => {
-  state.pointerX = toBoardX(e.clientX);
+// 絶対座標（ポインタロックしていない時 / タッチ）
+function toBoardX(clientX) {
+  const rect = canvas.getBoundingClientRect();
+  return (clientX - rect.left) / rect.width * W;
+}
+
+// ---- ポインタロック ------------------------------------------------------
+//
+// マウスがブラウザの枠から出てしまうと、そこでのクリックは他のウィンドウに入る。
+// 誤クリックでフォーカスを失い、ゲームが止まる。端に置きたいときほど枠外へ出るので、
+// 一番集中している場面で操作が破綻する。
+//
+// ポインタロックでカーソルを画面内に固定し、絶対座標ではなく移動量で動かす。
+// カーソルは物理的に外へ出られなくなる。
+
+function wantLock() {
+  if (state.locked) return;
+  if (!canvas.requestPointerLock) return;
+  const p = canvas.requestPointerLock();
+  if (p && p.catch) p.catch(() => {});   // 拒否されても従来通り動く
+}
+
+document.addEventListener('pointerlockchange', () => {
+  state.locked = document.pointerLockElement === canvas;
 });
+document.addEventListener('pointerlockerror', () => {
+  state.locked = false;
+});
+
+window.addEventListener('pointermove', e => {
+  if (state.locked) {
+    // 移動量を盤面スケールに変換して積む
+    const rect = canvas.getBoundingClientRect();
+    const scale = rect.width ? W / rect.width : 1;
+    applyRawX(state.rawX + e.movementX * scale);
+  } else {
+    applyRawX(toBoardX(e.clientX));
+  }
+});
+
 window.addEventListener('pointerdown', e => {
-  state.pointerX = toBoardX(e.clientX);
+  if (!state.locked) applyRawX(toBoardX(e.clientX));
   e.preventDefault();
 });
+
 window.addEventListener('pointerup', e => {
-  state.pointerX = toBoardX(e.clientX);
+  if (!state.locked) {
+    applyRawX(toBoardX(e.clientX));
+    // マウスのときだけ固定する。タッチには不要で、むしろ邪魔になる
+    if (e.pointerType === 'mouse') wantLock();
+  }
   requestDrop();
   e.preventDefault();
 });
+
 window.addEventListener('keydown', e => {
-  if (e.code === "Space") { requestDrop(); e.preventDefault(); }
+  if (e.code === 'Space') { requestDrop(); e.preventDefault(); }
 });
 
 // ---- キャンバス解像度 ----------------------------------------------------
