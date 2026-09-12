@@ -102,6 +102,8 @@ function rawShapeVerts(shape, r) {
     case 'hexagon':  return poly(6, Math.PI / 6);
     case 'pentagon': return poly(5, -Math.PI / 2);
     case 'ellipse':  return poly(14, 0, 1.0, 0.84);
+    // 包んだ飴。横に少し伸ばした枕形。面取りと合わせて角が取れる
+    case 'candy':    return poly(10, 0, 1.12, 0.82);
     case 'drop': {
       // しずく。上が尖って下が丸い。
       // **凸でなければならない。** 凹にすると Matter が凸分解を要求し、
@@ -232,6 +234,13 @@ const CANDY_SCORE = 15;
 
 const CANDY_R = 27;             // キャラとほぼ同大。盤面を強く圧迫する
 const CANDY_REACH = 29;
+
+// お邪魔も飴と同じ描き方（グラデーション・色付きの縁・つや）で描く。
+// ベタ塗りのままだと、つやのある飴と並んだときに絵柄が浮く。
+//
+// ただし**美味しそうに見せない**。彩度を落とした包み紙の色にして、
+// 中身が見えない「包んだまま」の状態として区別する
+const CANDY_TYPE = { id: 'candy', color: '#9a93ad', shine: '#d3ccdf', shape: 'candy' };
 const CANDY_LAYER_CAP = 4;      // 連鎖で広がる巻き込み層の上限
 
 // 投入契機は経過時間。ドロップ回数ではない（連続発射を許可しているため）
@@ -461,10 +470,16 @@ function spawnCandy() {
   const x = clamp(40 + Math.random() * (W - 80), CANDY_R + 2, W - CANDY_R - 2);
   // 画面外の上から入れる。キャラの出現帯（SPAWN_Y ± R）に居座ると、その真下の x で
   // プレイヤーが撃てなくなる
-  const b = Bodies.circle(x, -CANDY_R - 12, CANDY_R, Object.assign({}, CANDY_PHYS, {
+  const y = -CANDY_R - 12;
+  const opts = Object.assign({}, CANDY_PHYS, {
     label: 'candy',
     plugin: { candy: true, reach: CANDY_REACH },
-  }));
+  });
+
+  // 飴と同じく、形をそのまま当たり判定にする
+  const verts = shapeVerts('candy', CANDY_R);
+  const b = (verts && Bodies.fromVertices(x, y, [verts], opts))
+         || Bodies.circle(x, y, CANDY_R, opts);
   Composite.add(world, b);
 }
 
@@ -782,7 +797,7 @@ function checkGameOver() {
 
 // ---- 描画 ----------------------------------------------------------------
 
-const ALL_TYPES = TYPES.concat(DROPS);
+const ALL_TYPES = TYPES.concat(DROPS).concat([CANDY_TYPE]);
 const colorOf = id => ALL_TYPES.find(t => t.id === id);
 
 // ドロップを描く。
@@ -795,25 +810,56 @@ function traceVerts(verts, cx, cy) {
   ctx.closePath();
 }
 
+// 光源は画面の左上に固定。飴が回っても光は動かない。
+// 艶は「光源に一番近い輪郭上の点」に置くので、形が回ると艶が表面を滑る
+const LIGHT = (() => {
+  const v = { x: -0.45, y: -1 };
+  const n = Math.hypot(v.x, v.y);
+  return { x: v.x / n, y: v.y / n };
+})();
+const LIGHT_ANGLE = Math.atan2(LIGHT.y, LIGHT.x);
+
 function drawDrop(x, y, angle, r, id, alpha, body) {
   const c = colorOf(id);
   ctx.save();
   ctx.globalAlpha = alpha;
 
+  // 原点中心の頂点列を作る。これを輪郭にも光の計算にも使う
+  let local = null;
   if (body && body.vertices) {
     // 実体があるときは頂点をそのまま使う（回転も位置も織り込み済み）
     ctx.translate(body.position.x, body.position.y);
-    traceVerts(body.vertices, body.position.x, body.position.y);
+    local = body.vertices.map(v => ({
+      x: v.x - body.position.x, y: v.y - body.position.y,
+    }));
   } else {
     ctx.translate(x, y);
-    ctx.rotate(angle);
     const v = shapeVerts(c.shape, r);
-    if (v) traceVerts(v, 0, 0);
-    else { ctx.beginPath(); ctx.arc(0, 0, circleR(r), 0, Math.PI * 2); }
+    if (v) {
+      // 回転は頂点側に入れる。光の計算を回転後の形で行うため
+      const cos = Math.cos(angle), sin = Math.sin(angle);
+      local = v.map(p => ({ x: p.x * cos - p.y * sin, y: p.x * sin + p.y * cos }));
+    }
   }
 
-  // 上が明るく下が濃い。飴の厚みと透明感はこの一段で決まる
-  const g = ctx.createLinearGradient(0, -r, 0, r);
+  if (local) traceLocal(local);
+  else { ctx.beginPath(); ctx.arc(0, 0, circleR(r), 0, Math.PI * 2); }
+
+  // 光源方向・その逆方向に、輪郭がどこまで伸びているか
+  let lit = circleR(r), dark = circleR(r);
+  if (local) {
+    let mx = -Infinity, mn = Infinity;
+    for (const p of local) {
+      const d = p.x * LIGHT.x + p.y * LIGHT.y;
+      if (d > mx) mx = d;
+      if (d < mn) mn = d;
+    }
+    lit = mx; dark = -mn;
+  }
+
+  // 明暗も光源の向きに沿わせる。真上からの決め打ちだと回転に付いてこない
+  const g = ctx.createLinearGradient(
+    LIGHT.x * lit, LIGHT.y * lit, -LIGHT.x * dark, -LIGHT.y * dark);
   g.addColorStop(0, c.shine);
   g.addColorStop(0.42, c.color);
   g.addColorStop(1, shade(c.color, 0.72));
@@ -827,18 +873,20 @@ function drawDrop(x, y, angle, r, id, alpha, body) {
 
   ctx.clip();
 
-  // つやハイライト。上寄りに小さく置く
+  // 艶。光源側の輪郭のすぐ内側に置き、長軸を surface に沿わせる
   ctx.globalAlpha = alpha * 0.9;
   ctx.fillStyle = '#ffffff';
   ctx.beginPath();
-  ctx.ellipse(-r * 0.28, -r * 0.34, r * 0.3, r * 0.17, -0.6, 0, Math.PI * 2);
+  ctx.ellipse(LIGHT.x * lit * 0.56, LIGHT.y * lit * 0.56,
+              r * 0.30, r * 0.16, LIGHT_ANGLE + Math.PI / 2, 0, Math.PI * 2);
   ctx.fill();
 
-  // 下側の照り返し。これがあると「なめると甘そう」な質感になる
+  // 反対側の照り返し。これがあると「なめると甘そう」な質感になる
   ctx.globalAlpha = alpha * 0.28;
   ctx.fillStyle = c.shine;
   ctx.beginPath();
-  ctx.ellipse(r * 0.12, r * 0.42, r * 0.42, r * 0.16, 0.25, 0, Math.PI * 2);
+  ctx.ellipse(-LIGHT.x * dark * 0.6, -LIGHT.y * dark * 0.6,
+              r * 0.40, r * 0.15, LIGHT_ANGLE + Math.PI / 2, 0, Math.PI * 2);
   ctx.fill();
 
   ctx.restore();
@@ -924,41 +972,49 @@ function drawGirl(x, y, angle, r, id, alpha, p) {
   ctx.restore();
 }
 
-function drawCandy(x, y, angle, r, alpha) {
+function drawCandy(x, y, angle, r, alpha, body) {
+  // 本体は飴とまったく同じ描き方。絵柄を揃えないと並んだときに浮く
+  drawDrop(x, y, angle, r, 'candy', alpha, body);
+
+  // その上に包み紙のしわを重ねる。中身が見えない状態として飴と区別する
   ctx.save();
-  ctx.translate(x, y);
-  ctx.rotate(angle);
-  ctx.globalAlpha = alpha;
+  if (body && body.vertices) {
+    ctx.translate(body.position.x, body.position.y);
+    ctx.rotate(body.angle);
+    traceVerts(body.vertices, body.position.x, body.position.y);
+    ctx.beginPath();
+    traceLocal(shapeVerts('candy', r));
+  } else {
+    ctx.translate(x, y);
+    ctx.rotate(angle);
+    traceLocal(shapeVerts('candy', r));
+  }
+  ctx.clip();
 
-  // 包み（左右のひねり）。物理半径 r をはみ出さない範囲に収める。
-  // 大きく描くと見た目と当たり判定がズレて、置ける場所が読めなくなる
-  ctx.fillStyle = '#8d7fb5';
-  ctx.beginPath();
-  ctx.moveTo(-r * 1.0, -r * 0.62);
-  ctx.lineTo(-r * 0.45, 0);
-  ctx.lineTo(-r * 1.0, r * 0.62);
-  ctx.closePath();
-  ctx.fill();
-  ctx.beginPath();
-  ctx.moveTo(r * 1.0, -r * 0.62);
-  ctx.lineTo(r * 0.45, 0);
-  ctx.lineTo(r * 1.0, r * 0.62);
-  ctx.closePath();
-  ctx.fill();
-
-  // 本体
-  ctx.fillStyle = '#b6a7e0';
-  ctx.beginPath();
-  ctx.arc(0, 0, r * 0.95, 0, Math.PI * 2);
-  ctx.fill();
-
-  // ハイライト
-  ctx.fillStyle = 'rgba(255,255,255,0.35)';
-  ctx.beginPath();
-  ctx.arc(-r * 0.3, -r * 0.32, r * 0.28, 0, Math.PI * 2);
-  ctx.fill();
-
+  ctx.globalAlpha = alpha * 0.5;
+  ctx.strokeStyle = shade(CANDY_TYPE.color, 0.6);
+  ctx.lineWidth = Math.max(1, r * 0.07);
+  ctx.lineCap = 'round';
+  for (const s of [-1, 1]) {
+    ctx.beginPath();
+    ctx.moveTo(s * r * 0.42, -r * 0.62);
+    ctx.lineTo(s * r * 1.15, -r * 0.30);
+    ctx.moveTo(s * r * 0.42, r * 0.62);
+    ctx.lineTo(s * r * 1.15, r * 0.30);
+    ctx.moveTo(s * r * 0.46, 0);
+    ctx.lineTo(s * r * 1.15, 0);
+    ctx.stroke();
+  }
   ctx.restore();
+}
+
+// 原点中心の頂点列をそのままなぞる
+function traceLocal(verts) {
+  if (!verts || !verts.length) return;
+  ctx.beginPath();
+  ctx.moveTo(verts[0].x, verts[0].y);
+  for (let i = 1; i < verts.length; i++) ctx.lineTo(verts[i].x, verts[i].y);
+  ctx.closePath();
 }
 
 function draw() {
@@ -1005,7 +1061,7 @@ function draw() {
   }
 
   for (const b of candies()) {
-    drawCandy(b.position.x, b.position.y, b.angle, CANDY_R, 1);
+    drawCandy(b.position.x, b.position.y, b.angle, CANDY_R, 1, b);
   }
 
   for (const b of girls()) {
