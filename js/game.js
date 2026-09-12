@@ -232,15 +232,15 @@ const CANDY_SCORE = 15;
 
 // ---- キャンディー（設計書 3.2 / 7）--------------------------------------
 
-const CANDY_R = 27;             // キャラとほぼ同大。盤面を強く圧迫する
-const CANDY_REACH = 29;
+const CANDY_R = 32;             // 飴より少し大きい。盤面を強く圧迫する
+const CANDY_REACH = 34;
 
 // お邪魔も飴と同じ描き方（グラデーション・色付きの縁・つや）で描く。
 // ベタ塗りのままだと、つやのある飴と並んだときに絵柄が浮く。
 //
 // ただし**美味しそうに見せない**。彩度を落とした包み紙の色にして、
 // 中身が見えない「包んだまま」の状態として区別する
-const CANDY_TYPE = { id: 'candy', color: '#f58a3c', shine: '#ffc98a', shape: 'candy' };
+const CANDY_TYPE = { id: 'candy', color: '#8b8b99', shine: '#c4c4d0', shape: 'candy' };
 
 // 包み紙の形。中央の丸 + 左右のひねり。
 //
@@ -249,7 +249,7 @@ const CANDY_TYPE = { id: 'candy', color: '#f58a3c', shine: '#ffc98a', shape: 'ca
 // 指定しているのと同じ理由で、凹形状はパーツを足して作る。
 function candyGeom(r) {
   return {
-    cr: r * 0.66,                        // 中央の丸
+    cr: r * 0.72,                        // 中央の丸
     wedge: [                             // 右側のひねり。左は x を反転して使う
       { x: r * 0.52, y: -r * 0.17 },
       { x: r * 1.00, y: -r * 0.42 },
@@ -1050,10 +1050,25 @@ function drawCandy(x, y, angle, r, alpha, body) {
 
   // 縞。包み紙の柄
   ctx.globalAlpha = alpha * 0.5;
-  ctx.fillStyle = '#fff2dc';
+  ctx.fillStyle = '#2b2b34';
   ctx.rotate(-0.5);
   const pitch = r * 0.42, band = r * 0.17;
   for (let i = -4; i <= 4; i++) ctx.fillRect(i * pitch, -r * 2, band, r * 4);
+  ctx.restore();
+
+  // ハイライト。飴は鋭い白、包み紙は広くて弱い光にする。
+  // 紙にも照りはあるが、飴と同じ強さで入れると中身が見えるキャンディに見える
+  ctx.save();
+  ctx.beginPath();
+  ctx.arc(0, 0, g.cr, 0, Math.PI * 2);
+  ctx.clip();
+  ctx.rotate(-(body ? body.angle : angle));   // 光源は回転しない
+  ctx.globalAlpha = alpha * 0.30;
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath();
+  ctx.ellipse(LIGHT.x * g.cr * 0.5, LIGHT.y * g.cr * 0.5,
+              g.cr * 0.62, g.cr * 0.30, LIGHT_ANGLE + Math.PI / 2, 0, Math.PI * 2);
+  ctx.fill();
   ctx.restore();
 
   // 輪郭を締める。紙の縁
