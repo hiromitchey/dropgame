@@ -187,8 +187,15 @@ const gradeTarget = g => Math.round(GRADE_BASE * Math.pow(GRADE_GROWTH, g - 1) /
 // グレードが重なって、そこだけ急に難しくなる（グレード5がそうだった）
 const gradeKinds = g => Math.min(DROPS.length, 2 + Math.ceil(g / 3));
 
-// グレードが上がるほどキャンディーが早く来る
-const gradeCandyScale = g => Math.max(0.72, 1 - (g - 1) * 0.05);
+// グレードが上がるほどキャンディーが早く来る。
+//
+// 5までは緩やかに、6以降で締める。長く続けるほど連打が疲れるので、
+// そのあたりで決着が付くようにする。序盤の傾きを変えると、ならしたはずの
+// グレード5の跳ねが戻ってしまうため、後半だけを急にしている
+const GRADE_RAMP_FROM = 5;
+const gradeCandyScale = g => (g <= GRADE_RAMP_FROM
+  ? 1 - (g - 1) * 0.05
+  : Math.max(0.30, (1 - (GRADE_RAMP_FROM - 1) * 0.05) - (g - GRADE_RAMP_FROM) * 0.145));
 
 // 色が増えたグレードだけ、お邪魔を緩める。
 //
@@ -294,9 +301,16 @@ const candyInterval = wave => {
 };
 // 1回の投入数には上限を置く。目標点が上がるほど1グレードが長くなり、
 // 波が進んで投入数だけが際限なく増える。終盤だけ理不尽に重くなるのを防ぐ
+// 上限は後半だけ引き上げる。序盤を重くせずに、終盤の決着だけ早める
 const CANDY_COUNT_MAX = 2;
-const candyCount = wave =>
-  Math.min(CANDY_COUNT_MAX, 1 + Math.floor(wave / CANDY_COUNT_EVERY));
+const CANDY_COUNT_MAX_LATE = 3;
+const CANDY_COUNT_LATE_FROM = 7;   // このグレードから上限を上げる
+
+const candyCount = wave => {
+  const cap = (GRADE_MODE && state.grade >= CANDY_COUNT_LATE_FROM)
+    ? CANDY_COUNT_MAX_LATE : CANDY_COUNT_MAX;
+  return Math.min(cap, 1 + Math.floor(wave / CANDY_COUNT_EVERY));
+};
 
 // キャンディーは転がらず「詰まる」（設計書 3.2）
 const CANDY_PHYS = {
