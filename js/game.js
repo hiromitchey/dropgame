@@ -235,11 +235,11 @@ const CANDY_REACH = 29;
 const CANDY_LAYER_CAP = 4;      // 連鎖で広がる巻き込み層の上限
 
 // 投入契機は経過時間。ドロップ回数ではない（連続発射を許可しているため）
-const CANDY_FIRST = 4500;       // 初回までの猶予 (ms)
-const CANDY_INTERVAL_MAX = 5600;
+const CANDY_FIRST = 3800;       // 初回までの猶予 (ms)
+const CANDY_INTERVAL_MAX = 4600;   // 序盤の基準。旧設定のグレード5相当をここに持ってきている
 const CANDY_INTERVAL_MIN = 2800;
 const CANDY_INTERVAL_STEP = 190;   // 1波ごとに間隔を詰める量。小さいほど増え方が緩やか
-const CANDY_COUNT_EVERY = 7;      // 何波ごとに1回の投入数を増やすか
+const CANDY_COUNT_EVERY = 6;      // 何波ごとに1回の投入数を増やすか
 
 const candyInterval = wave => {
   const base = Math.max(CANDY_INTERVAL_MIN, CANDY_INTERVAL_MAX - wave * CANDY_INTERVAL_STEP);
