@@ -240,7 +240,7 @@ const CANDY_REACH = 29;
 //
 // ただし**美味しそうに見せない**。彩度を落とした包み紙の色にして、
 // 中身が見えない「包んだまま」の状態として区別する
-const CANDY_TYPE = { id: 'candy', color: '#9a93ad', shine: '#d3ccdf', shape: 'candy' };
+const CANDY_TYPE = { id: 'candy', color: '#f58a3c', shine: '#ffc98a', shape: 'candy' };
 const CANDY_LAYER_CAP = 4;      // 連鎖で広がる巻き込み層の上限
 
 // 投入契機は経過時間。ドロップ回数ではない（連続発射を許可しているため）
@@ -991,20 +991,17 @@ function drawCandy(x, y, angle, r, alpha, body) {
   }
   ctx.clip();
 
-  ctx.globalAlpha = alpha * 0.5;
-  ctx.strokeStyle = shade(CANDY_TYPE.color, 0.6);
-  ctx.lineWidth = Math.max(1, r * 0.07);
-  ctx.lineCap = 'round';
-  for (const s of [-1, 1]) {
-    ctx.beginPath();
-    ctx.moveTo(s * r * 0.42, -r * 0.62);
-    ctx.lineTo(s * r * 1.15, -r * 0.30);
-    ctx.moveTo(s * r * 0.42, r * 0.62);
-    ctx.lineTo(s * r * 1.15, r * 0.30);
-    ctx.moveTo(s * r * 0.46, 0);
-    ctx.lineTo(s * r * 1.15, 0);
-    ctx.stroke();
+  // 斜めストライプ。横長の楕円に筋を入れると豆の合わせ目に見えてしまうため、
+  // 縞にして「包み紙」であることを一目で分かるようにする
+  ctx.globalAlpha = alpha * 0.55;
+  ctx.fillStyle = '#fff4e2';
+  ctx.rotate(-0.5);
+  const pitch = r * 0.62, band = r * 0.26;
+  for (let i = -4; i <= 4; i++) {
+    ctx.fillRect(i * pitch, -r * 2, band, r * 4);
   }
+  ctx.rotate(0.5);
+
   ctx.restore();
 }
 
