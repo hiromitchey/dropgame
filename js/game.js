@@ -31,6 +31,99 @@ const TYPES = [
     stand: [1051, 36, 363, 484], x: [1042, 546, 402, 443] },
 ];
 
+// ---- ドロップ（シンプル版）------------------------------------------------
+//
+// 色ごとに形が違う。**形は見た目だけでなく当たり判定でもある。**
+// 頂点リストを1つ作り、それを物理ボディと描画の両方に使うことでズレを防いでいる。
+//
+// 設計書 4.1 は fromVertices を「凸分解の精度・速度」を理由に不採用としているが、
+// それはキャラのシルエットのような凹形状の話。ここで使うのは全て凸多角形で、
+// 分解が発生しないため該当しない。
+//
+// なお、形が当たり判定と一致する以上、描画の回転は実角度でなければならない。
+// キャラ版の「回転を 0.3 倍に抑えて顔の向きを保つ」処理はここでは使えない。
+const DROPS = [
+  { id: 'd1', color: '#5ec46b', shine: '#a6e8ac', shape: 'circle' },
+  { id: 'd2', color: '#f2b13c', shine: '#ffdb9a', shape: 'drop'    },
+  { id: 'd3', color: '#e8557c', shine: '#ffa8bf', shape: 'square'  },
+  { id: 'd4', color: '#57b4e0', shine: '#a8e0f5', shape: 'hexagon' },
+  { id: 'd5', color: '#a77ce0', shine: '#d6befa', shape: 'ellipse' },
+  { id: 'd6', color: '#f0e05a', shine: '#fff6b0', shape: 'pentagon'},
+];
+
+// 形状の頂点。原点中心・半径 r に収まる凸多角形を返す。circle だけ null。
+//
+// 最後に必ず凸包を取る。凹んだ頂点列を Bodies.fromVertices に渡すと、Matter は
+// poly-decomp による凸分解を要求し、無い場合は黙って凸包に差し替える。
+// こちらで先に凸包にしておけば、渡した形と実際の当たり判定が必ず一致する。
+// 角は必ず丸める。尖った飴は見た目が固く、積んだときも刺さって気持ちよくない。
+// 面取りは頂点列そのものに掛けるので、当たり判定も同じだけ丸くなる
+// 面取りは半径に対する比で持つ。固定値にすると、NEXT のように小さく描いたときに
+// 面取りの方が形より大きくなって崩れる（五角形が一番目立つ）
+const CHAMFER_RATIO = 0.48; // 角の丸み。大きいほど丸に近づく
+const CHAMFER_QUALITY = 3;  // 1つの角を何分割するか。増やすと滑らかだが頂点が増える
+
+// 見た目の大きさを揃える基準。多角形は円に内接する上に面取りでさらに痩せるため、
+// 半径をそのまま使うと丸だけが大きく見える。全形状をこの面積に正規化する
+const AREA_RATIO = 0.90;                                  // 丸の半径を R の何倍にするか
+const circleR = r => r * AREA_RATIO;
+const targetArea = r => Math.PI * circleR(r) * circleR(r);
+
+function shapeVerts(shape, r) {
+  const raw = rawShapeVerts(shape, r);
+  if (!raw) return null;
+  const hull = Matter.Vertices.hull(raw.map(p => ({ x: p.x, y: p.y })));
+  const round = Matter.Vertices.chamfer(hull, r * CHAMFER_RATIO, CHAMFER_QUALITY, 2, 10);
+  // 面取り後にもう一度凸包を取る。丸めの計算誤差でわずかに凹むことがあり、
+  // そのまま渡すと Matter が凸分解を要求して警告を出す
+  const v = Matter.Vertices.hull(round);
+
+  // 面積を丸に合わせる。形が違っても「同じ大きさの飴」に見えるようにする
+  const area = Math.abs(Matter.Vertices.area(v, true));
+  if (area > 0) {
+    const k = Math.sqrt(targetArea(r) / area);
+    Matter.Vertices.scale(v, k, k, { x: 0, y: 0 });
+  }
+  return v;
+}
+
+function rawShapeVerts(shape, r) {
+  const poly = (n, rot, sx, sy) => {
+    const v = [];
+    for (let i = 0; i < n; i++) {
+      const a = rot + (i / n) * Math.PI * 2;
+      v.push({ x: Math.cos(a) * r * (sx || 1), y: Math.sin(a) * r * (sy || 1) });
+    }
+    return v;
+  };
+  switch (shape) {
+    case 'circle':   return null;
+    case 'square':   return poly(4, Math.PI / 4);
+    case 'hexagon':  return poly(6, Math.PI / 6);
+    case 'pentagon': return poly(5, -Math.PI / 2);
+    case 'ellipse':  return poly(14, 0, 1.0, 0.84);
+    case 'drop': {
+      // しずく。上が尖って下が丸い。
+      // **凸でなければならない。** 凹にすると Matter が凸分解を要求し、
+      // poly-decomp が無いと凸包に置き換えられて意図した形にならない。
+      // 頂点を下半分の円弧 + 頂点1つに絞り、肩を張らせないことで凸に保つ
+      // 先端は1点に集めず、少し幅を持たせる。面取りと合わせて丸い頭になる
+      const v = [];
+      const cy = r * 0.10;
+      const rr = r * 0.86;
+      const spread = Math.PI * 0.84;
+      for (let i = 0; i <= 12; i++) {
+        const a = (Math.PI / 2 - spread) + (i / 12) * (spread * 2);
+        v.push({ x: Math.cos(a) * rr, y: cy + Math.sin(a) * rr });
+      }
+      v.push({ x:  r * 0.26, y: -r * 0.98 });
+      v.push({ x: -r * 0.26, y: -r * 0.98 });
+      return v;
+    }
+    default: return null;
+  }
+}
+
 // 消滅エフェクト
 const EFFECT_LIFE = 18;         // 消滅エフェクトの表示フレーム数
 const EFFECT_HOLD = 0.55;       // この割合までは不透明を保ち、以降で抜く
@@ -63,6 +156,34 @@ const MODE_KEY = USE_SPRITES ? 'girls' : 'plain';
 
 // タイトル画面はキャラ版のみ。丸だけ版はすぐ始まる
 const TITLE = 'ドロップデルタもん';
+
+// ---- グレード（シンプル版）------------------------------------------------
+//
+// 目標点に達するとクリア。盤面を一掃して次のグレードへ進む。
+// グレードが上がると目標点が伸び、キャンディーが速くなり、途中から色の種類が増える。
+const GRADE_MODE = !USE_SPRITES;
+const GRADE_BASE = 1200;        // グレード1の目標点
+const GRADE_GROWTH = 1.55;      // 目標点の伸び
+// クリア時に盤面をどうするか。
+//
+//   残す（既定）: 山が高いまま次のグレードに入るので緊張が途切れない。
+//                 クリアが「ご褒美」ではなく「通過点」になる
+//   一掃する    : 毎回まっさらから。リズムは良いが、クリアのたびに危機が消える
+//
+// ?sweep=1 を付けると一掃する側に切り替わる。比較用
+const GRADE_SWEEP = new URLSearchParams(location.search).get('sweep') === '1';
+const GRADE_CLEAR_HOLD = GRADE_SWEEP ? 150 : 95;   // 一掃する場合は見せる時間が要る
+const GRADE_SWEEP_SCORE = 20;   // 一掃したときの、残っていた1個あたりのボーナス
+const WAVE_CARRY = 1;           // グレードが1つ上がるごとに、お邪魔の波をいくつ進めた状態で始めるか
+                                // 盤面を持ち越す設定ではお邪魔も残るため、下駄は控えめにする
+
+const gradeTarget = g => Math.round(GRADE_BASE * Math.pow(GRADE_GROWTH, g - 1) / 50) * 50;
+
+// 何色使うか。増えるほど揃わなくなる
+const gradeKinds = g => Math.min(DROPS.length, 2 + Math.ceil(g / 2));
+
+// グレードが上がるほどキャンディーが早く来る
+const gradeCandyScale = g => Math.max(0.72, 1 - (g - 1) * 0.05);
 
 const sheet = new Image();
 let sheetReady = false;
@@ -114,15 +235,21 @@ const CANDY_REACH = 29;
 const CANDY_LAYER_CAP = 4;      // 連鎖で広がる巻き込み層の上限
 
 // 投入契機は経過時間。ドロップ回数ではない（連続発射を許可しているため）
-const CANDY_FIRST = 6000;       // 初回までの猶予 (ms)
-const CANDY_INTERVAL_MAX = 7000;
-const CANDY_INTERVAL_MIN = 2200;
-const CANDY_INTERVAL_STEP = 400;   // 1波ごとに間隔を詰める量
-const CANDY_COUNT_EVERY = 3;      // 何波ごとに1回の投入数を増やすか
+const CANDY_FIRST = 4500;       // 初回までの猶予 (ms)
+const CANDY_INTERVAL_MAX = 5600;
+const CANDY_INTERVAL_MIN = 2800;
+const CANDY_INTERVAL_STEP = 190;   // 1波ごとに間隔を詰める量。小さいほど増え方が緩やか
+const CANDY_COUNT_EVERY = 7;      // 何波ごとに1回の投入数を増やすか
 
-const candyInterval = wave =>
-  Math.max(CANDY_INTERVAL_MIN, CANDY_INTERVAL_MAX - wave * CANDY_INTERVAL_STEP);
-const candyCount = wave => 1 + Math.floor(wave / CANDY_COUNT_EVERY);
+const candyInterval = wave => {
+  const base = Math.max(CANDY_INTERVAL_MIN, CANDY_INTERVAL_MAX - wave * CANDY_INTERVAL_STEP);
+  return GRADE_MODE ? base * gradeCandyScale(state.grade) : base;
+};
+// 1回の投入数には上限を置く。目標点が上がるほど1グレードが長くなり、
+// 波が進んで投入数だけが際限なく増える。終盤だけ理不尽に重くなるのを防ぐ
+const CANDY_COUNT_MAX = 2;
+const candyCount = wave =>
+  Math.min(CANDY_COUNT_MAX, 1 + Math.floor(wave / CANDY_COUNT_EVERY));
 
 // キャンディーは転がらず「詰まる」（設計書 3.2）
 const CANDY_PHYS = {
@@ -166,6 +293,9 @@ const state = {
   pushEdge: 0,        // 盤面外へはみ出している向き（-1 左 / 0 内側 / 1 右）
   rawX: W / 2,        // クランプ前のポインタ位置
   locked: false,      // ポインタロック中か
+  grade: 1,           // シンプル版のグレード
+  gradeScore: 0,      // 今のグレードで稼いだ点
+  clearT: 0,          // クリア演出の残りフレーム
   started: !USE_SPRITES,   // タイトル画面を抜けたか
   titleT: 0,          // タイトルの経過フレーム
 };
@@ -183,8 +313,43 @@ function buildWalls() {
   ]);
 }
 
+// 今そのモード・グレードで使う色の一覧
+function palette() {
+  if (!GRADE_MODE) return TYPES;
+  return DROPS.slice(0, gradeKinds(state.grade));
+}
+
 function randomType() {
-  return TYPES[(Math.random() * TYPES.length) | 0];
+  const p = palette();
+  return p[(Math.random() * p.length) | 0];
+}
+
+// ボディを作る。シンプル版は形が当たり判定そのもの
+function makePieceBody(type, x, y) {
+  const opts = Object.assign({}, PHYS, {
+    label: 'girl',
+    plugin: {
+      type: type.id, reach: REACH,
+      pose: 'x', from: 'x', morph: 1, poseAt: 0, flap: 0,
+    },
+  });
+
+  if (!GRADE_MODE) return Bodies.circle(x, y, R, opts);
+
+  const verts = shapeVerts(type.shape, R);
+  if (!verts) return Bodies.circle(x, y, circleR(R), opts);   // 丸も面積を揃える
+
+  const b = Bodies.fromVertices(x, y, [verts], opts);
+  // fromVertices は重心に合わせて原点をずらす。描画は body.vertices を直接使うので
+  // ここでズレは生じないが、つながり判定用の reach は実際の広がりから取り直す
+  if (b) {
+    let far = 0;
+    for (const v of b.vertices) {
+      far = Math.max(far, Math.hypot(v.x - b.position.x, v.y - b.position.y));
+    }
+    b.plugin.reach = far * 1.04;
+  }
+  return b || Bodies.circle(x, y, R, opts);
 }
 
 function fillQueue() {
@@ -195,8 +360,16 @@ function fillQueue() {
 function reset() {
   Composite.clear(world, false);
   buildWalls();
+
+  // グレードを先に戻す。NEXT の補充は palette() を通してグレードを見るため、
+  // 順番を逆にすると前回のグレードの色数で補充され、1面から後半の色が出てくる
+  state.grade = 1;
+  state.gradeScore = 0;
+  state.clearT = 0;
+
   state.queue.length = 0;
   fillQueue();
+
   state.score = 0;
   state.chain = 0;
   state.frame = 0;
@@ -275,13 +448,7 @@ function drop() {
   const type = state.queue.shift();
   fillQueue();
 
-  const b = Bodies.circle(x, SPAWN_Y, R, Object.assign({}, PHYS, {
-    label: 'girl',
-    plugin: {
-      type: type.id, reach: REACH,
-      pose: "x", from: "x", morph: 1, poseAt: 0, flap: 0,   // morph 1 = 切り替え完了
-    },
-  }));
+  const b = makePieceBody(type, x, SPAWN_Y);
   Composite.add(world, b);
   state.lastDrop = now;
   state.wantDropAt = 0;
@@ -516,7 +683,7 @@ function scan() {
       removeQueue.push(b);
       clearedGirls.push(b);
       // 消える瞬間は全員が大の字になる。途中で閉じかけていても揃える
-      state.effects.push({ x: b.position.x, y: b.position.y, type: b.plugin.type, t: 0 });
+      state.effects.push({ x: b.position.x, y: b.position.y, angle: b.angle, type: b.plugin.type, t: 0 });
       if (Math.random() < BUBBLE_ON_CLEAR) {
         spawnBubble(b.position.x, b.position.y - R * 0.6, b.plugin.type, true);
       }
@@ -531,9 +698,16 @@ function scan() {
     state.effects.push({ x: c.position.x, y: c.position.y, candy: true, t: 0 });
   }
 
-  state.score += cleared * BASE_SCORE * state.chain
+  const gained = cleared * BASE_SCORE * state.chain
                + swept.length * CANDY_SCORE * state.chain;
+  state.score += gained;
+  state.gradeScore += gained;
   state.recheckAt = now + RECHECK_DELAY;
+
+  // 目標点に届いたらグレードクリア
+  if (GRADE_MODE && !state.clearT && state.gradeScore >= gradeTarget(state.grade)) {
+    beginGradeClear();
+  }
 }
 
 // 消去は afterUpdate でまとめて実行（設計書 5.3）
@@ -542,6 +716,51 @@ Events.on(engine, 'afterUpdate', () => {
   for (const b of removeQueue) Composite.remove(world, b);
   removeQueue.length = 0;
 });
+
+// ---- グレード進行（シンプル版）--------------------------------------------
+
+function beginGradeClear() {
+  state.clearT = GRADE_CLEAR_HOLD;
+  if (!GRADE_SWEEP) return;   // 盤面はそのまま次のグレードへ持ち越す
+
+  // 残っていた分は掃除してボーナスにする。盤面を空にして次へ進む
+  for (const b of pieces()) {
+    removeQueue.push(b);
+    if (b.plugin.candy) {
+      state.effects.push({ x: b.position.x, y: b.position.y, candy: true, t: 0 });
+    } else {
+      state.effects.push({
+        x: b.position.x, y: b.position.y, angle: b.angle, type: b.plugin.type, t: 0,
+      });
+      state.score += GRADE_SWEEP_SCORE;
+    }
+  }
+}
+
+function finishGradeClear() {
+  state.grade++;
+  state.gradeScore = 0;
+  state.clearT = 0;
+
+  // 次のグレードの色数で引き直す。前の色が残っていると新しい色が出てこない
+  state.queue.length = 0;
+  fillQueue();
+
+  // お邪魔のペースはグレードに応じて速くする。
+  //
+  // ここで wave を 0 に戻すと「1回1個・7秒間隔」から仕切り直しになり、
+  // グレードが上がったのに圧力が下がって見える。グレードぶんの下駄を履かせて、
+  // 進むほど確実に厳しくなるようにする
+  state.wave = (state.grade - 1) * WAVE_CARRY;
+  state.nextCandyAt = performance.now() + CANDY_FIRST * gradeCandyScale(state.grade);
+  state.recheckAt = 0;
+  state.chain = 0;
+  state.lastClear = -Infinity;
+
+  // ライン超過の計測をここで切る。盤面を持ち越す場合、クリアした瞬間に山が高くても
+  // 猶予を与える。クリアできたこと自体をご褒美にする
+  state.overSince = 0;
+}
 
 // ---- ゲームオーバー（設計書 7）------------------------------------------
 
@@ -563,7 +782,54 @@ function checkGameOver() {
 
 // ---- 描画 ----------------------------------------------------------------
 
-const colorOf = id => TYPES.find(t => t.id === id);
+const ALL_TYPES = TYPES.concat(DROPS);
+const colorOf = id => ALL_TYPES.find(t => t.id === id);
+
+// ドロップを描く。
+// 盤面の実体は body.vertices をそのままなぞるので、見た目と当たり判定が必ず一致する。
+// 待機中の1個や NEXT のように実体が無いものは、同じ shapeVerts から形を起こす。
+function traceVerts(verts, cx, cy) {
+  ctx.beginPath();
+  ctx.moveTo(verts[0].x - cx, verts[0].y - cy);
+  for (let i = 1; i < verts.length; i++) ctx.lineTo(verts[i].x - cx, verts[i].y - cy);
+  ctx.closePath();
+}
+
+function drawDrop(x, y, angle, r, id, alpha, body) {
+  const c = colorOf(id);
+  ctx.save();
+  ctx.globalAlpha = alpha;
+
+  if (body && body.vertices) {
+    // 実体があるときは頂点をそのまま使う（回転も位置も織り込み済み）
+    ctx.translate(body.position.x, body.position.y);
+    traceVerts(body.vertices, body.position.x, body.position.y);
+  } else {
+    ctx.translate(x, y);
+    ctx.rotate(angle);
+    const v = shapeVerts(c.shape, r);
+    if (v) traceVerts(v, 0, 0);
+    else { ctx.beginPath(); ctx.arc(0, 0, circleR(r), 0, Math.PI * 2); }
+  }
+
+  ctx.fillStyle = c.color;
+  ctx.fill();
+
+  // 縁を少し暗く締めて、飴の厚みを出す
+  ctx.lineWidth = Math.max(1, r * 0.10);
+  ctx.strokeStyle = 'rgba(20,16,30,0.35)';
+  ctx.stroke();
+
+  // つやハイライト。形の内側に収まるよう小さめに置く
+  ctx.clip();
+  ctx.globalAlpha = alpha * 0.85;
+  ctx.fillStyle = c.shine;
+  ctx.beginPath();
+  ctx.ellipse(-r * 0.26, -r * 0.3, r * 0.34, r * 0.2, -0.6, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.restore();
+}
 
 // 1枚分の描画。高さ基準で合わせる。
 // 幅基準にすると縦にはみ出して隣とめり込んで見える
@@ -577,6 +843,12 @@ function blitPose(c, pose, r, alpha) {
 }
 
 // morph: { from, pose, morph } を渡すと開閉の途中を描く。省略時は大の字
+// キャラ版とシンプル版の入口を1本にする。呼び出し側はどちらか意識しない
+function drawPiece(x, y, angle, r, id, alpha, p, body) {
+  if (GRADE_MODE) drawDrop(x, y, angle, r, id, alpha, body);
+  else drawGirl(x, y, angle, r, id, alpha, p);
+}
+
 function drawGirl(x, y, angle, r, id, alpha, p) {
   const c = colorOf(id);
   ctx.save();
@@ -707,7 +979,7 @@ function draw() {
     ctx.moveTo(x, SPAWN_Y);
     ctx.lineTo(x, H);
     ctx.stroke();
-    drawGirl(x, SPAWN_Y, 0, R, state.queue[0].id, 1);
+    drawPiece(x, SPAWN_Y, 0, R, state.queue[0].id, 1);
   }
 
   for (const b of candies()) {
@@ -715,7 +987,7 @@ function draw() {
   }
 
   for (const b of girls()) {
-    drawGirl(b.position.x, b.position.y, b.angle, R, b.plugin.type, 1, b.plugin);
+    drawPiece(b.position.x, b.position.y, b.angle, R, b.plugin.type, 1, b.plugin, b);
   }
 
   // 消滅エフェクト。キャラは大の字（drawGirl の既定ポーズ）で消える。
@@ -725,7 +997,7 @@ function draw() {
     const t = e.t / EFFECT_LIFE;
     const a = t < EFFECT_HOLD ? 1 : 1 - (t - EFFECT_HOLD) / (1 - EFFECT_HOLD);
     if (e.candy) drawCandy(e.x, e.y, 0, CANDY_R * (1 + t * 0.9), a);
-    else drawGirl(e.x, e.y, 0, R * (1 + t * 0.9), e.type, a);
+    else drawPiece(e.x, e.y, e.angle || 0, R * (1 + t * 0.9), e.type, a);
   }
 
   drawBubbles();
@@ -867,6 +1139,74 @@ function drawTitle() {
   ctx.restore();
 }
 
+// グレードと目標点の進捗。今どこまで来ているかが常に見えていないと、
+// 目標点があること自体に気づかれない
+function drawGradeMeter() {
+  const target = gradeTarget(state.grade);
+  const p = clamp(state.gradeScore / target, 0, 1);
+
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#e8ecf8';
+  ctx.font = 'bold 14px system-ui, sans-serif';
+  ctx.fillText('GRADE ' + state.grade, 16, 84);
+
+  ctx.fillStyle = '#5a6280';
+  ctx.font = '11px system-ui, sans-serif';
+  ctx.fillText(state.gradeScore + ' / ' + target, 16, 116);
+
+  const bw = 150, bh = 7;
+  ctx.fillStyle = '#252a3c';
+  ctx.fillRect(16, 94, bw, bh);
+  const g = ctx.createLinearGradient(16, 0, 16 + bw, 0);
+  g.addColorStop(0, '#5ec46b');
+  g.addColorStop(1, '#f0e05a');
+  ctx.fillStyle = g;
+  ctx.fillRect(16, 94, bw * p, bh);
+
+  // 使っている色数も出す。増えたことが分かるように
+  ctx.fillStyle = '#5a6280';
+  ctx.textAlign = 'right';
+  ctx.fillText(gradeKinds(state.grade) + ' COLORS', 16 + bw, 116);
+}
+
+// グレードクリアの表示
+function drawGradeClear() {
+  const t = 1 - state.clearT / GRADE_CLEAR_HOLD;
+  const pop = t < 0.18 ? t / 0.18 : 1;
+
+  ctx.save();
+  ctx.globalAlpha = state.clearT < 24 ? state.clearT / 24 : 1;
+  ctx.translate(W / 2, H / 2 - 30);
+  ctx.scale(0.6 + pop * 0.4, 0.6 + pop * 0.4);
+  ctx.textAlign = 'center';
+
+  ctx.font = 'bold 46px system-ui, sans-serif';
+  ctx.lineWidth = 8;
+  ctx.strokeStyle = 'rgba(14,16,26,0.9)';
+  ctx.strokeText('GRADE ' + state.grade, 0, 0);
+  ctx.fillStyle = '#ffe6a3';
+  ctx.fillText('GRADE ' + state.grade, 0, 0);
+
+  ctx.font = 'bold 30px system-ui, sans-serif';
+  ctx.strokeText('CLEAR!', 0, 44);
+  ctx.fillStyle = '#5ec46b';
+  ctx.fillText('CLEAR!', 0, 44);
+
+  const nextKinds = gradeKinds(state.grade + 1);
+  const notes = [];
+  if (nextKinds > gradeKinds(state.grade)) notes.push('ドロップが ' + nextKinds + ' 色に増える');
+  if (!GRADE_SWEEP) notes.push('盤面はそのまま');
+
+  ctx.font = 'bold 17px system-ui, sans-serif';
+  notes.forEach((line, i) => {
+    ctx.fillStyle = '#e8ecf8';
+    ctx.strokeText(line, 0, 88 + i * 26);
+    ctx.fillText(line, 0, 88 + i * 26);
+  });
+  ctx.restore();
+  ctx.globalAlpha = 1;
+}
+
 function drawHud() {
   ctx.globalAlpha = 1;
   ctx.fillStyle = '#e8ecf8';
@@ -878,13 +1218,15 @@ function drawHud() {
   ctx.font = '12px system-ui, sans-serif';
   ctx.fillText('BEST ' + state.best, 16, 56);
 
+  if (GRADE_MODE) drawGradeMeter();
+
   // NEXT。近い手ほど大きく・濃く描き、順番が一目で分かるようにする。
   // 待機キャラの帯（SPAWN_Y ± R = 39〜101）より上に置く。重なると手前のキャラが読めない
   // 直近の手をラベル寄り（左）に置く。左から右へ読む順序と手番の順序を一致させる
   for (let i = 1; i <= NEXT_SHOWN; i++) {
     const k = i - 1;
     const x = W - 28 - (NEXT_SHOWN - 1 - k) * 36;
-    drawGirl(x, 22, 0, 14 - k * 2.2, state.queue[i].id, 0.95 - k * 0.22);
+    drawPiece(x, 22, 0, 14 - k * 2.2, state.queue[i].id, 0.95 - k * 0.22);
   }
   ctx.textAlign = 'right';
   ctx.fillStyle = '#5a6280';
@@ -898,17 +1240,21 @@ function drawHud() {
     const n = candyCount(state.wave);
     const imminent = left < 3000;
 
-    ctx.textAlign = 'left';
+    // グレード版は左にグレードメーターが入るので、キャンディー予告は右へ逃がす
+    const bw = 96, bh = 4;
+    const bx = GRADE_MODE ? W - 16 - bw : 16;
+
+    ctx.textAlign = GRADE_MODE ? 'right' : 'left';
     ctx.fillStyle = imminent ? '#c9a3f0' : '#5a6280';
     ctx.font = '12px system-ui, sans-serif';
-    ctx.fillText('CANDY x' + n + '  ' + (left / 1000).toFixed(1) + 's', 16, 82);
+    ctx.fillText('CANDY x' + n + '  ' + (left / 1000).toFixed(1) + 's',
+                 GRADE_MODE ? W - 16 : 16, 82);
 
     // 残り時間バー
-    const bw = 96, bh = 4;
     ctx.fillStyle = '#252a3c';
-    ctx.fillRect(16, 90, bw, bh);
+    ctx.fillRect(bx, 90, bw, bh);
     ctx.fillStyle = imminent ? '#b6a7e0' : '#454d6b';
-    ctx.fillRect(16, 90, bw * clamp(1 - left / span, 0, 1), bh);
+    ctx.fillRect(bx, 90, bw * clamp(1 - left / span, 0, 1), bh);
   }
 
   // 案内はゲームオーバーラインより上に出す。
@@ -932,6 +1278,7 @@ function drawHud() {
   }
 
   drawChain();
+  if (GRADE_MODE && state.clearT > 0) drawGradeClear();
 
   if (state.gameOver) {
     ctx.globalAlpha = 1;
@@ -963,6 +1310,19 @@ function tick() {
   if (!state.gameOver) {
     Engine.update(engine, 1000 / 60);
     state.frame++;
+
+    // クリア演出中は入力もお邪魔も止める
+    if (state.clearT > 0) {
+      if (--state.clearT === 0) finishGradeClear();
+      updatePoses();
+      updateBubbles();
+      for (let i = state.effects.length - 1; i >= 0; i--) {
+        if (++state.effects[i].t > EFFECT_LIFE) state.effects.splice(i, 1);
+      }
+      draw();
+      requestAnimationFrame(tick);
+      return;
+    }
 
     updatePendingDrop();
     updateCandy();
