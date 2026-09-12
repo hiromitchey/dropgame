@@ -165,7 +165,7 @@ const TITLE = USE_SPRITES ? 'ドロップデルタもん' : 'ドロップス';
 // グレードが上がると目標点が伸び、キャンディーが速くなり、途中から色の種類が増える。
 const GRADE_MODE = !USE_SPRITES;
 const GRADE_BASE = 1200;        // グレード1の目標点
-const GRADE_GROWTH = 1.55;      // 目標点の伸び
+const GRADE_GROWTH = 1.42;      // 目標点の伸び
 // クリア時に盤面をどうするか。
 //
 //   残す（既定）: 山が高いまま次のグレードに入るので緊張が途切れない。
@@ -181,11 +181,24 @@ const WAVE_CARRY = 1;           // グレードが1つ上がるごとに、お�
 
 const gradeTarget = g => Math.round(GRADE_BASE * Math.pow(GRADE_GROWTH, g - 1) / 50) * 50;
 
-// 何色使うか。増えるほど揃わなくなる
-const gradeKinds = g => Math.min(DROPS.length, 2 + Math.ceil(g / 2));
+// 何色使うか。増えるほど揃わなくなる。
+//
+// 3グレードごとに1色。2グレードごとだと、色が増えるグレードと目標点が跳ねる
+// グレードが重なって、そこだけ急に難しくなる（グレード5がそうだった）
+const gradeKinds = g => Math.min(DROPS.length, 2 + Math.ceil(g / 3));
 
 // グレードが上がるほどキャンディーが早く来る
 const gradeCandyScale = g => Math.max(0.72, 1 - (g - 1) * 0.05);
+
+// 色が増えたグレードだけ、お邪魔を緩める。
+//
+// 色が1つ増えると揃う確率が一段下がり、そこへ目標点の上昇と投入ペースの加速が
+// 重なると、そのグレードだけ急にきつくなる。新しい色に慣れる時間を渡す
+const COLOR_RELIEF = 1.35;      // 投入間隔を何倍にするか
+const COLOR_RELIEF_WAVES = 3;   // 波をいくつ巻き戻すか
+
+const colorAdded = g => g > 1 && gradeKinds(g) > gradeKinds(g - 1);
+const gradeRelief = g => (colorAdded(g) ? COLOR_RELIEF : 1);
 
 const sheet = new Image();
 let sheetReady = false;
@@ -269,7 +282,7 @@ const CANDY_COUNT_EVERY = 6;      // 何波ごとに1回の投入数を増やす
 
 const candyInterval = wave => {
   const base = Math.max(CANDY_INTERVAL_MIN, CANDY_INTERVAL_MAX - wave * CANDY_INTERVAL_STEP);
-  return GRADE_MODE ? base * gradeCandyScale(state.grade) : base;
+  return GRADE_MODE ? base * gradeCandyScale(state.grade) * gradeRelief(state.grade) : base;
 };
 // 1回の投入数には上限を置く。目標点が上がるほど1グレードが長くなり、
 // 波が進んで投入数だけが際限なく増える。終盤だけ理不尽に重くなるのを防ぐ
@@ -795,7 +808,8 @@ function finishGradeClear() {
   // ここで wave を 0 に戻すと「1回1個・7秒間隔」から仕切り直しになり、
   // グレードが上がったのに圧力が下がって見える。グレードぶんの下駄を履かせて、
   // 進むほど確実に厳しくなるようにする
-  state.wave = (state.grade - 1) * WAVE_CARRY;
+  state.wave = Math.max(0, (state.grade - 1) * WAVE_CARRY
+                          - (colorAdded(state.grade) ? COLOR_RELIEF_WAVES : 0));
   state.nextCandyAt = performance.now() + CANDY_FIRST * gradeCandyScale(state.grade);
   state.recheckAt = 0;
   state.chain = 0;
