@@ -1385,17 +1385,15 @@ function drawGradeClear() {
   ctx.fillStyle = '#5ec46b';
   ctx.fillText('CLEAR!', 0, 44);
 
+  // 伝えるのは次のグレードで変わることだけ。仕様の説明は出さない
   const nextKinds = gradeKinds(state.grade + 1);
-  const notes = [];
-  if (nextKinds > gradeKinds(state.grade)) notes.push('ドロップが ' + nextKinds + ' 色に増える');
-  if (!GRADE_SWEEP) notes.push('盤面はそのまま');
-
-  ctx.font = 'bold 17px system-ui, sans-serif';
-  notes.forEach((line, i) => {
+  if (nextKinds > gradeKinds(state.grade)) {
+    const line = 'あたらしい あめ が でてくる';
+    ctx.font = 'bold 17px system-ui, sans-serif';
     ctx.fillStyle = '#e8ecf8';
-    ctx.strokeText(line, 0, 88 + i * 26);
-    ctx.fillText(line, 0, 88 + i * 26);
-  });
+    ctx.strokeText(line, 0, 88);
+    ctx.fillText(line, 0, 88);
+  }
   ctx.restore();
   ctx.globalAlpha = 1;
 }
@@ -1463,10 +1461,13 @@ function drawHud() {
     }
 
     // ポインタが固定されていないと、カーソルがブラウザの枠外へ出てしまい、
-    // そこでのクリックが他のウィンドウに入って集中が切れる
-    if (!state.locked) {
+    // そこでのクリックが他のウィンドウに入って集中が切れる。
+    // ただし出しっぱなしは説明書きが居座って邪魔なので、序盤だけにする
+    if (!state.locked && state.frame < 600) {
+      ctx.globalAlpha = clamp((600 - state.frame) / 90, 0, 1);
       ctx.font = '12px system-ui, sans-serif';
-      ctx.fillText('クリックでマウスを画面内に固定　（Esc で解除）', W / 2, LINE_Y - 14);
+      ctx.fillText('Esc でマウスが外に出せる', W / 2, LINE_Y - 14);
+      ctx.globalAlpha = 1;
     }
   }
 
