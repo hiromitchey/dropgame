@@ -43,12 +43,12 @@ const TYPES = [
 // なお、形が当たり判定と一致する以上、描画の回転は実角度でなければならない。
 // キャラ版の「回転を 0.3 倍に抑えて顔の向きを保つ」処理はここでは使えない。
 const DROPS = [
-  { id: 'd1', color: '#5ec46b', shine: '#a6e8ac', shape: 'circle' },
-  { id: 'd2', color: '#f2b13c', shine: '#ffdb9a', shape: 'drop'    },
-  { id: 'd3', color: '#e8557c', shine: '#ffa8bf', shape: 'square'  },
-  { id: 'd4', color: '#57b4e0', shine: '#a8e0f5', shape: 'hexagon' },
-  { id: 'd5', color: '#a77ce0', shine: '#d6befa', shape: 'ellipse' },
-  { id: 'd6', color: '#f0e05a', shine: '#fff6b0', shape: 'pentagon'},
+  { id: 'd1', color: '#a3d13f', shine: '#dcf08a', shape: 'circle'  },  // メロン
+  { id: 'd2', color: '#f0ece0', shine: '#ffffff', shape: 'drop'    },  // ハッカ（乳白）
+  { id: 'd3', color: '#ef5b7d', shine: '#ffb3c4', shape: 'square'  },  // いちご
+  { id: 'd4', color: '#4fbce8', shine: '#b3e6fa', shape: 'hexagon' },  // ソーダ
+  { id: 'd5', color: '#9d6fd8', shine: '#d8bdf7', shape: 'ellipse' },  // ぶどう
+  { id: 'd6', color: '#f7d13f', shine: '#fff2a8', shape: 'pentagon'},  // レモン
 ];
 
 // 形状の頂点。原点中心・半径 r に収まる凸多角形を返す。circle だけ null。
@@ -812,23 +812,45 @@ function drawDrop(x, y, angle, r, id, alpha, body) {
     else { ctx.beginPath(); ctx.arc(0, 0, circleR(r), 0, Math.PI * 2); }
   }
 
-  ctx.fillStyle = c.color;
+  // 上が明るく下が濃い。飴の厚みと透明感はこの一段で決まる
+  const g = ctx.createLinearGradient(0, -r, 0, r);
+  g.addColorStop(0, c.shine);
+  g.addColorStop(0.42, c.color);
+  g.addColorStop(1, shade(c.color, 0.72));
+  ctx.fillStyle = g;
   ctx.fill();
 
-  // 縁を少し暗く締めて、飴の厚みを出す
-  ctx.lineWidth = Math.max(1, r * 0.10);
-  ctx.strokeStyle = 'rgba(20,16,30,0.35)';
+  // 縁は黒ではなく自分の色を濃くしたもので締める。黒で囲むと濁って見える
+  ctx.lineWidth = Math.max(1, r * 0.09);
+  ctx.strokeStyle = shade(c.color, 0.55);
   ctx.stroke();
 
-  // つやハイライト。形の内側に収まるよう小さめに置く
   ctx.clip();
-  ctx.globalAlpha = alpha * 0.85;
+
+  // つやハイライト。上寄りに小さく置く
+  ctx.globalAlpha = alpha * 0.9;
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath();
+  ctx.ellipse(-r * 0.28, -r * 0.34, r * 0.3, r * 0.17, -0.6, 0, Math.PI * 2);
+  ctx.fill();
+
+  // 下側の照り返し。これがあると「なめると甘そう」な質感になる
+  ctx.globalAlpha = alpha * 0.28;
   ctx.fillStyle = c.shine;
   ctx.beginPath();
-  ctx.ellipse(-r * 0.26, -r * 0.3, r * 0.34, r * 0.2, -0.6, 0, Math.PI * 2);
+  ctx.ellipse(r * 0.12, r * 0.42, r * 0.42, r * 0.16, 0.25, 0, Math.PI * 2);
   ctx.fill();
 
   ctx.restore();
+}
+
+// 色を暗くする。#rrggbb 前提
+function shade(hex, k) {
+  const n = parseInt(hex.slice(1), 16);
+  const r = Math.round(((n >> 16) & 255) * k);
+  const g = Math.round(((n >> 8) & 255) * k);
+  const b = Math.round((n & 255) * k);
+  return 'rgb(' + r + ',' + g + ',' + b + ')';
 }
 
 // 1枚分の描画。高さ基準で合わせる。
