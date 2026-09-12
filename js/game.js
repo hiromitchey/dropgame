@@ -194,11 +194,19 @@ const gradeCandyScale = g => Math.max(0.72, 1 - (g - 1) * 0.05);
 //
 // 色が1つ増えると揃う確率が一段下がり、そこへ目標点の上昇と投入ペースの加速が
 // 重なると、そのグレードだけ急にきつくなる。新しい色に慣れる時間を渡す
-const COLOR_RELIEF = 1.35;      // 投入間隔を何倍にするか
-const COLOR_RELIEF_WAVES = 3;   // 波をいくつ巻き戻すか
+// 緩和は一段で戻さず、次のグレードにかけて徐々に戻す。
+// 一気に戻すと、緩和した次のグレードで圧力が跳ね上がり、そこが新しい難所になる
+const COLOR_RELIEF = [1.35, 1.18, 1.07];   // 色が増えたグレードから順に掛ける倍率
+const COLOR_RELIEF_WAVES = 3;              // 波をいくつ巻き戻すか
 
 const colorAdded = g => g > 1 && gradeKinds(g) > gradeKinds(g - 1);
-const gradeRelief = g => (colorAdded(g) ? COLOR_RELIEF : 1);
+
+function gradeRelief(g) {
+  for (let i = 0; i < COLOR_RELIEF.length; i++) {
+    if (colorAdded(g - i)) return COLOR_RELIEF[i];
+  }
+  return 1;
+}
 
 const sheet = new Image();
 let sheetReady = false;
