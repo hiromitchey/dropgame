@@ -154,8 +154,8 @@ const POSE_FLAP_FRAMES = 60;    // 落下中の開閉間隔。60フレーム = �
 const USE_SPRITES = !window.DROP_DELTA_PLAIN;
 const MODE_KEY = USE_SPRITES ? 'girls' : 'plain';
 
-// タイトル画面はキャラ版のみ。丸だけ版はすぐ始まる
-const TITLE = 'ドロップデルタもん';
+// タイトル画面は両方に出す。名前が付いた以上、名乗る場所が要る
+const TITLE = USE_SPRITES ? 'ドロップデルタもん' : 'ドロップス';
 
 // ---- グレード（シンプル版）------------------------------------------------
 //
@@ -296,7 +296,7 @@ const state = {
   grade: 1,           // シンプル版のグレード
   gradeScore: 0,      // 今のグレードで稼いだ点
   clearT: 0,          // クリア演出の残りフレーム
-  started: !USE_SPRITES,   // タイトル画面を抜けたか
+  started: false,     // タイトル画面を抜けたか
   titleT: 0,          // タイトルの経過フレーム
 };
 
@@ -1097,43 +1097,55 @@ function drawTitle() {
   ctx.fillStyle = g;
   ctx.fillText(TITLE, W / 2, 210 + bob);
 
-  // 3人を並べる。落下中と同じ間隔で開閉させる
-  const pose = Math.floor(t / POSE_FLAP_FRAMES) % 2 ? 'stand' : 'x';
-  const prev = pose === 'x' ? 'stand' : 'x';
-  const m = clamp((t % POSE_FLAP_FRAMES) / POSE_MORPH_FRAMES, 0, 1);
-  TYPES.forEach((ty, i) => {
-    const x = W / 2 + (i - 1) * 116;
-    const y = 380 + Math.sin(t / 30 + i * 1.1) * 7;
-    drawGirl(x, y, 0, 44, ty.id, 1, { pose, from: prev, morph: m });
-  });
+  if (GRADE_MODE) {
+    // 飴を2段に並べてゆっくり回す。形の違いがひと目で分かるように全色出す
+    DROPS.forEach((ty, i) => {
+      const col = i % 3, row = (i / 3) | 0;
+      const x = W / 2 + (col - 1) * 104;
+      const y = 330 + row * 96 + Math.sin(t / 28 + i * 0.9) * 6;
+      drawDrop(x, y, t / 120 + i, 34, ty.id, 1);
+    });
+  } else {
+    // 3人を並べる。落下中と同じ間隔で開閉させる
+    const pose = Math.floor(t / POSE_FLAP_FRAMES) % 2 ? 'stand' : 'x';
+    const prev = pose === 'x' ? 'stand' : 'x';
+    const m = clamp((t % POSE_FLAP_FRAMES) / POSE_MORPH_FRAMES, 0, 1);
+    TYPES.forEach((ty, i) => {
+      const x = W / 2 + (i - 1) * 116;
+      const y = 380 + Math.sin(t / 30 + i * 1.1) * 7;
+      drawGirl(x, y, 0, 44, ty.id, 1, { pose, from: prev, morph: m });
+    });
 
-  // セリフを順番に見せる
-  TYPES.forEach((ty, i) => {
-    const phase = (t / 90) % 3;
-    const on = Math.floor(phase) === i;
-    if (!on) return;
-    ctx.globalAlpha = 0.9;
-    ctx.font = 'bold 17px system-ui, sans-serif';
-    ctx.lineWidth = 3.5;
-    ctx.strokeStyle = 'rgba(16,18,28,0.85)';
-    ctx.strokeText(ty.line, W / 2 + (i - 1) * 116, 316);
-    ctx.fillStyle = ty.hair;
-    ctx.fillText(ty.line, W / 2 + (i - 1) * 116, 316);
-    ctx.globalAlpha = 1;
-  });
+    // セリフを順番に見せる
+    TYPES.forEach((ty, i) => {
+      const phase = (t / 90) % 3;
+      if (Math.floor(phase) !== i) return;
+      ctx.globalAlpha = 0.9;
+      ctx.font = 'bold 17px system-ui, sans-serif';
+      ctx.lineWidth = 3.5;
+      ctx.strokeStyle = 'rgba(16,18,28,0.85)';
+      ctx.strokeText(ty.line, W / 2 + (i - 1) * 116, 316);
+      ctx.fillStyle = ty.hair;
+      ctx.fillText(ty.line, W / 2 + (i - 1) * 116, 316);
+      ctx.globalAlpha = 1;
+    });
+  }
 
   // 点滅する案内
   ctx.globalAlpha = 0.55 + Math.sin(t / 16) * 0.45;
   ctx.fillStyle = '#e8ecf8';
   ctx.font = 'bold 18px system-ui, sans-serif';
-  ctx.fillText('クリックでスタート', W / 2, 530);
+  ctx.fillText('クリックでスタート', W / 2, GRADE_MODE ? 560 : 530);
   ctx.globalAlpha = 1;
 
   ctx.fillStyle = '#5a6280';
   ctx.font = '12px system-ui, sans-serif';
-  ctx.fillText('同じ子が3人つながると消える　　連鎖でキャンディーをまとめて片付ける', W / 2, 578);
+  const how = GRADE_MODE
+    ? '同じ飴が3つつながると消える　　目標点に届くとグレードアップ'
+    : '同じ子が3人つながると消える　　連鎖でキャンディーをまとめて片付ける';
+  ctx.fillText(how, W / 2, GRADE_MODE ? 604 : 578);
   if (state.best > 0) {
-    ctx.fillText('BEST ' + state.best, W / 2, 600);
+    ctx.fillText('BEST ' + state.best, W / 2, GRADE_MODE ? 626 : 600);
   }
 
   ctx.restore();
