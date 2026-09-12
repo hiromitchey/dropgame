@@ -4,7 +4,7 @@
 
 'use strict';
 
-const { Engine, Composite, Bodies, Events, Query } = Matter;
+const { Engine, Composite, Bodies, Body, Events, Query } = Matter;
 
 // ---- 盤面 ----------------------------------------------------------------
 
@@ -241,6 +241,23 @@ const CANDY_REACH = 29;
 // ただし**美味しそうに見せない**。彩度を落とした包み紙の色にして、
 // 中身が見えない「包んだまま」の状態として区別する
 const CANDY_TYPE = { id: 'candy', color: '#f58a3c', shine: '#ffc98a', shape: 'candy' };
+
+// 包み紙の形。中央の丸 + 左右のひねり。
+//
+// この輪郭は凹んでいるため、1つの凸多角形では表せない。**複合ボディ**で作る
+// （中央の円 + ひねり2枚）。設計書 4.1 が凸分解ではなく円の組み合わせを
+// 指定しているのと同じ理由で、凹形状はパーツを足して作る。
+function candyGeom(r) {
+  return {
+    cr: r * 0.66,                        // 中央の丸
+    wedge: [                             // 右側のひねり。左は x を反転して使う
+      { x: r * 0.52, y: -r * 0.17 },
+      { x: r * 1.00, y: -r * 0.42 },
+      { x: r * 1.00, y:  r * 0.42 },
+      { x: r * 0.52, y:  r * 0.17 },
+    ],
+  };
+}
 const CANDY_LAYER_CAP = 4;      // 連鎖で広がる巻き込み層の上限
 
 // 投入契機は経過時間。ドロップ回数ではない（連続発射を許可しているため）
@@ -470,17 +487,29 @@ function spawnCandy() {
   const x = clamp(40 + Math.random() * (W - 80), CANDY_R + 2, W - CANDY_R - 2);
   // 画面外の上から入れる。キャラの出現帯（SPAWN_Y ± R）に居座ると、その真下の x で
   // プレイヤーが撃てなくなる
-  const y = -CANDY_R - 12;
-  const opts = Object.assign({}, CANDY_PHYS, {
+  Composite.add(world, makeCandyBody(x, -CANDY_R - 12));
+}
+
+// 中央の丸 + 左右のひねりを1つのボディにまとめる。
+// 凹んだ輪郭なので単一の凸多角形では作れない
+function makeCandyBody(x, y) {
+  const g = candyGeom(CANDY_R);
+  const parts = [Bodies.circle(x, y, g.cr, Object.assign({}, CANDY_PHYS))];
+
+  for (const s of [1, -1]) {
+    const verts = g.wedge.map(p => ({ x: p.x * s, y: p.y }));
+    const c = Matter.Vertices.centre(verts);
+    // fromVertices は重心を指定位置に合わせる。ずらしたい分を足しておく
+    const w = Bodies.fromVertices(x + c.x, y + c.y, [verts], Object.assign({}, CANDY_PHYS));
+    if (w) parts.push(w);
+  }
+
+  const body = Body.create(Object.assign({}, CANDY_PHYS, {
+    parts,
     label: 'candy',
     plugin: { candy: true, reach: CANDY_REACH },
-  });
-
-  // 飴と同じく、形をそのまま当たり判定にする
-  const verts = shapeVerts('candy', CANDY_R);
-  const b = (verts && Bodies.fromVertices(x, y, [verts], opts))
-         || Bodies.circle(x, y, CANDY_R, opts);
-  Composite.add(world, b);
+  }));
+  return body;
 }
 
 function updateCandy() {
@@ -972,35 +1001,68 @@ function drawGirl(x, y, angle, r, id, alpha, p) {
   ctx.restore();
 }
 
+// お邪魔は飴ではなく「包み紙」。**つやを飴と揃えない。**
+// 紙はマットなので、鋭いハイライトを入れると中身の見えるキャンディに見えてしまい、
+// 美味しそうな飴と区別がつかなくなる
 function drawCandy(x, y, angle, r, alpha, body) {
-  // 本体は飴とまったく同じ描き方。絵柄を揃えないと並んだときに浮く
-  drawDrop(x, y, angle, r, 'candy', alpha, body);
+  const g = candyGeom(r);
+  const base = CANDY_TYPE.color;
 
-  // その上に包み紙のしわを重ねる。中身が見えない状態として飴と区別する
   ctx.save();
-  if (body && body.vertices) {
-    ctx.translate(body.position.x, body.position.y);
-    ctx.rotate(body.angle);
-    traceVerts(body.vertices, body.position.x, body.position.y);
+  ctx.globalAlpha = alpha;
+  ctx.translate(body ? body.position.x : x, body ? body.position.y : y);
+  ctx.rotate(body ? body.angle : angle);
+
+  // ひねり。中央より暗くして、奥に折り込まれている感じを出す
+  for (const s of [1, -1]) {
     ctx.beginPath();
-    traceLocal(shapeVerts('candy', r));
-  } else {
-    ctx.translate(x, y);
-    ctx.rotate(angle);
-    traceLocal(shapeVerts('candy', r));
+    g.wedge.forEach((p, i) => {
+      const px = p.x * s, py = p.y;
+      i ? ctx.lineTo(px, py) : ctx.moveTo(px, py);
+    });
+    ctx.closePath();
+    ctx.fillStyle = shade(base, 0.78);
+    ctx.fill();
+
+    // ひねりの筋。先端に向かって収束させる
+    ctx.strokeStyle = shade(base, 0.58);
+    ctx.lineWidth = Math.max(1, r * 0.05);
+    ctx.lineCap = 'round';
+    for (const k of [-0.5, 0, 0.5]) {
+      ctx.beginPath();
+      ctx.moveTo(s * r * 0.56, k * r * 0.13);
+      ctx.lineTo(s * r * 0.96, k * r * 0.34);
+      ctx.stroke();
+    }
   }
+
+  // 中央。紙なので明暗の差は弱く、境目もぼかさない
+  ctx.beginPath();
+  ctx.arc(0, 0, g.cr, 0, Math.PI * 2);
+  const fill = ctx.createLinearGradient(0, -g.cr, 0, g.cr);
+  fill.addColorStop(0, shade(base, 1.08));
+  fill.addColorStop(1, shade(base, 0.86));
+  ctx.fillStyle = fill;
+  ctx.fill();
+
+  ctx.save();
   ctx.clip();
 
-  // 斜めストライプ。横長の楕円に筋を入れると豆の合わせ目に見えてしまうため、
-  // 縞にして「包み紙」であることを一目で分かるようにする
-  ctx.globalAlpha = alpha * 0.55;
-  ctx.fillStyle = '#fff4e2';
+  // 縞。包み紙の柄
+  ctx.globalAlpha = alpha * 0.5;
+  ctx.fillStyle = '#fff2dc';
   ctx.rotate(-0.5);
-  const pitch = r * 0.62, band = r * 0.26;
-  for (let i = -4; i <= 4; i++) {
-    ctx.fillRect(i * pitch, -r * 2, band, r * 4);
-  }
-  ctx.rotate(0.5);
+  const pitch = r * 0.42, band = r * 0.17;
+  for (let i = -4; i <= 4; i++) ctx.fillRect(i * pitch, -r * 2, band, r * 4);
+  ctx.restore();
+
+  // 輪郭を締める。紙の縁
+  ctx.globalAlpha = alpha;
+  ctx.beginPath();
+  ctx.arc(0, 0, g.cr, 0, Math.PI * 2);
+  ctx.strokeStyle = shade(base, 0.6);
+  ctx.lineWidth = Math.max(1, r * 0.07);
+  ctx.stroke();
 
   ctx.restore();
 }
