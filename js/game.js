@@ -1138,14 +1138,21 @@ function drawTitle() {
   ctx.fillText('クリックでスタート', W / 2, GRADE_MODE ? 560 : 530);
   ctx.globalAlpha = 1;
 
+  // 操作を最初に言う。ルールや進行はゲーム中に画面へ出るが、
+  // 「どう遊ぶか」は最初に伝えないと何も始まらない
+  const base = GRADE_MODE ? 598 : 572;
+  ctx.fillStyle = '#8a93b0';
+  ctx.font = 'bold 13px system-ui, sans-serif';
+  ctx.fillText(GRADE_MODE ? 'クリックすると飴が落ちてくる'
+                          : 'クリックすると女の子が落ちてくる', W / 2, base);
+
   ctx.fillStyle = '#5a6280';
   ctx.font = '12px system-ui, sans-serif';
-  const how = GRADE_MODE
-    ? '同じ飴が3つつながると消える　　目標点に届くとグレードアップ'
-    : '同じ子が3人つながると消える　　連鎖でキャンディーをまとめて片付ける';
-  ctx.fillText(how, W / 2, GRADE_MODE ? 604 : 578);
+  ctx.fillText(GRADE_MODE ? '同じ飴が3つつながると消える'
+                          : '同じ子が3人つながると消える', W / 2, base + 22);
+
   if (state.best > 0) {
-    ctx.fillText('BEST ' + state.best, W / 2, GRADE_MODE ? 626 : 600);
+    ctx.fillText('BEST ' + state.best, W / 2, base + 46);
   }
 
   ctx.restore();
