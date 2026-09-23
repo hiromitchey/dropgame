@@ -4,6 +4,3 @@ doc/
 
 # Windows が付ける代替データストリーム
 *:Zone.Identifier
-
-# 素材の原本（透過処理前）。img/girls.png が生成物なのでリポジトリには入れない
-ChatGPT Image*.png
