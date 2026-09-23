@@ -537,7 +537,6 @@ const state = {
   wantDropX: 0,
   pushEdge: 0,        // 盤面外へはみ出している向き（-1 左 / 0 内側 / 1 右）
   rawX: W / 2,        // クランプ前のポインタ位置
-  locked: false,      // ポインタロック中か
   grade: 1,           // シンプル版のグレード
   gradeScore: 0,      // 今のグレードで稼いだ点
   clearT: 0,          // クリア演出の残りフレーム
@@ -732,7 +731,6 @@ function updateLeave() {
 function goTitle() {
   Sound.titleMusic();
   Sound.showPanel(true);
-  releaseLock();
   state.holding = false;
   state.bests = null;
   state.started = false;
@@ -1136,7 +1134,6 @@ function checkGameOver() {
     Sound.gameOver();
     Sound.bgmFade(0.4);     // がっかりの音を目立たせるため、BGM はすっと消す
     Sound.showPanel(true);
-    releaseLock();          // 音量のパネルなどを触れるように、カーソルを返す
     if (state.score > state.best) {
       state.best = state.score;
       writeBest(state.stage, state.best);
@@ -2580,15 +2577,6 @@ function drawHud() {
       ctx.fillText('うごかす: マウス / ゆび　　おとす: おしっぱなし', W / 2, 132);
     }
 
-    // ポインタが固定されていないと、カーソルがブラウザの枠外へ出てしまい、
-    // そこでのクリックが他のウィンドウに入って集中が切れる。
-    // ただし出しっぱなしは説明書きが居座って邪魔なので、序盤だけにする
-    if (!state.locked && state.frame < 600) {
-      ctx.globalAlpha = clamp((600 - state.frame) / 90, 0, 1);
-      ctx.font = '12px ' + FONT_FAMILY;
-      ctx.fillText('Esc で マウスが そとに だせる', W / 2, 172);
-      ctx.globalAlpha = 1;
-    }
   }
 
   drawChainCute();
@@ -2703,47 +2691,14 @@ function toBoardY(clientY) {
   return (clientY - rect.top) / rect.height * H;
 }
 
-// ---- ポインタロック ------------------------------------------------------
-//
-// マウスがブラウザの枠から出てしまうと、そこでのクリックは他のウィンドウに入る。
-// 誤クリックでフォーカスを失い、ゲームが止まる。端に置きたいときほど枠外へ出るので、
-// 一番集中している場面で操作が破綻する。
-//
-// ポインタロックでカーソルを画面内に固定し、絶対座標ではなく移動量で動かす。
-// カーソルは物理的に外へ出られなくなる。
-
-function wantLock() {
-  if (state.locked) return;
-  if (!canvas.requestPointerLock) return;
-  const p = canvas.requestPointerLock();
-  if (p && p.catch) p.catch(() => {});   // 拒否されても従来通り動く
-}
-
-function releaseLock() {
-  if (document.pointerLockElement === canvas && document.exitPointerLock) document.exitPointerLock();
-}
-
-document.addEventListener('pointerlockchange', () => {
-  state.locked = document.pointerLockElement === canvas;
-});
-document.addEventListener('pointerlockerror', () => {
-  state.locked = false;
-});
-
+// マウスは固定しない（ポインタロックは使わない）。
+// 固定するとカーソルがブラウザに消されてしまい、「勝手に消えないでほしい」に反する。
+// 枠の外へ出てしまう問題は、はみ出した側の端を光らせる（drawTitle 下の pushEdge）ことで見せる
 window.addEventListener('pointermove', e => {
   state.mouse = e.pointerType === 'mouse';
-  if (state.locked) {
-    // 移動量を盤面スケールに変換して積む
-    const rect = canvas.getBoundingClientRect();
-    const scale = rect.width ? W / rect.width : 1;
-    applyRawX(state.rawX + e.movementX * scale);
-    state.pointerY = clamp(state.pointerY + e.movementY * scale, 0, H);
-    state.cursorX = clamp(state.cursorX + e.movementX * scale, 0, W);
-  } else {
-    applyRawX(toBoardX(e.clientX));
-    state.pointerY = toBoardY(e.clientY);
-    state.cursorX = toBoardX(e.clientX);
-  }
+  applyRawX(toBoardX(e.clientX));
+  state.pointerY = toBoardY(e.clientY);
+  state.cursorX = toBoardX(e.clientX);
   titleHover();
 });
 
@@ -2757,10 +2712,8 @@ function titleHover() {
 window.addEventListener('pointerdown', e => {
   state.mouse = e.pointerType === 'mouse';
   Sound.unlock();          // ブラウザは操作の中でしか音を出させない
-  if (!state.locked) {
-    applyRawX(toBoardX(e.clientX));
-    state.pointerY = toBoardY(e.clientY);
-  }
+  applyRawX(toBoardX(e.clientX));
+  state.pointerY = toBoardY(e.clientY);
   // タイトルとゲームオーバーでは「押して離す」で進む。遊んでいる間は押した瞬間から連射
   if (!state.started || state.gameOver) state.pressArmed = true;
   else beginHold();
@@ -2768,10 +2721,8 @@ window.addEventListener('pointerdown', e => {
 });
 
 window.addEventListener('pointerup', e => {
-  if (!state.locked) {
-    applyRawX(toBoardX(e.clientX));
-    state.pointerY = toBoardY(e.clientY);
-  }
+  applyRawX(toBoardX(e.clientX));
+  state.pointerY = toBoardY(e.clientY);
   // 押しっぱなしのままゲームオーバーになった場合、その指を離しただけでタイトルへ
   // 飛ばないよう、ゲームオーバー後に改めて押したときだけ進める
   if (!state.started || state.gameOver) {
@@ -2779,9 +2730,6 @@ window.addEventListener('pointerup', e => {
   } else {
     endHold();
   }
-  // マウスのときだけ固定する（タッチには不要で、むしろ邪魔になる）。
-  // 遊んでいる間だけ。タイトルとゲームオーバーではカーソルを返して、音量のパネルを触れるようにする
-  if (e.pointerType === 'mouse' && state.started && !state.gameOver) wantLock();
   state.pressArmed = false;
   e.preventDefault();
 });
