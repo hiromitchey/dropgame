@@ -42,10 +42,7 @@
 <body>
   <div id="wrap"><canvas id="cv"></canvas></div>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/matter-js/0.19.0/matter.min.js"></script>
-  <!-- スプライトを使わず色の丸で描く。物理・判定・難易度は index.html と完全に同一 -->
-  <script>window.DROP_DELTA_PLAIN = true;</script>
-  <!-- GitHub Pages はファイルを 10 分キャッシュさせるので、更新の直後は古い game.js と新しい sound.js が
-       混ざって動くことがあった。ページを開くたびに読み直す（?v= を毎回変える）。順番は async=false で守る -->
+  <!-- ページを開くたびに読み直す（?v= を毎回変える）。順番は async=false で守る -->
   <script>
     (function () {
       var v = Date.now();

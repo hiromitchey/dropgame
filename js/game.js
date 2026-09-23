@@ -1,6 +1,6 @@
 // drop delta - Phase 1 + 5
 // 落下・堆積・同種3体消去・連鎖・キャンディー（お邪魔）まで。
-// 設計書 doc/bp.md 参照。複合ボディ・キャラ画像・ポーズ切り替えは Phase 2〜4。
+// 設計書 doc/bp.md 参照。
 
 'use strict';
 
@@ -11,25 +11,9 @@ const { Engine, Composite, Bodies, Body, Events, Query, Sleeping } = Matter;
 const W = 480;              // 論理解像度。実解像度は DPR で拡大
 const H = 760;
 const WALL = 60;            // 壁の厚み（画面外に置く）
-// 待機キャラの出現高さ。ドロップスは上の表示（y=4〜42）と重ならないよう少し下げる
-const SPAWN_Y = window.DROP_DELTA_PLAIN ? 84 : 70;
+// 落とすフルーツの出る高さ。上の表示（y=4〜42）と重ならないよう少し下げてある
+const SPAWN_Y = 84;
 
-// ---- キャラ --------------------------------------------------------------
-
-// 切り出し座標は設計書 8 の通り。body/hair は画像が読めるまでの代替色。
-//
-// 素材は SD 体型（頭が大きく体が小さい）に差し替え済み。
-// 等身が高いと 60px 程度では顔が潰れて種類を見分けられなかった。
-// 縦横比も改善し（棒立ち 1:2.9 → 1:1.3〜2.2）、円の当たり判定に載せても
-// 極端にはみ出さなくなったため、棒立ちも使えるようになった。
-const TYPES = [
-  { id: 'a', body: '#7ecb8f', hair: '#4da362', line: 'ですわ～',
-    stand: [163, 23, 221, 494], x: [75, 531, 398, 456] },
-  { id: 'b', body: '#7fd6d0', hair: '#4aa8b8', line: '任せてくれ',
-    stand: [599, 27, 324, 492], x: [577, 542, 367, 446] },
-  { id: 'c', body: '#f492b8', hair: '#e05c92', line: 'デス！',
-    stand: [1051, 36, 363, 484], x: [1042, 546, 402, 443] },
-];
 
 // ---- ドロップ（シンプル版）------------------------------------------------
 //
@@ -37,11 +21,10 @@ const TYPES = [
 // 頂点リストを1つ作り、それを物理ボディと描画の両方に使うことでズレを防いでいる。
 //
 // 設計書 4.1 は fromVertices を「凸分解の精度・速度」を理由に不採用としているが、
-// それはキャラのシルエットのような凹形状の話。ここで使うのは全て凸多角形で、
+// それは凹んだ形の話。ここで使うのは全て凸多角形で、
 // 分解が発生しないため該当しない。
 //
 // なお、形が当たり判定と一致する以上、描画の回転は実角度でなければならない。
-// キャラ版の「回転を 0.3 倍に抑えて顔の向きを保つ」処理はここでは使えない。
 // pattern は飴の表面の柄。色が種類を見分ける一番の手がかりなので、柄は控えめに重ねる
 const DROPS = [
   { id: 'd1', color: '#a3d13f', shine: '#dcf08a', shape: 'circle',   pattern: 'melon'      },
@@ -133,46 +116,19 @@ function rawShapeVerts(shape, r) {
 const EFFECT_LIFE = 18;         // 消滅エフェクトの表示フレーム数
 const EFFECT_HOLD = 0.55;       // この割合までは不透明を保ち、以降で抜く
 
-// セリフのぽわぽわ
-const BUBBLE_LIFE = 70;         // セリフの表示フレーム数
-const BUBBLE_ON_CLEAR = 0.5;    // 消えた1体がセリフを出す確率
-const BUBBLE_IDLE = 0.0009;     // 静止中の1体が1フレームに喋る確率
-const BUBBLE_MAX = 14;          // 同時表示の上限。出しすぎると盤面が読めない
-
-const SPRITE_FIT = 1.12;        // 直径に対する描画高さの倍率
-
-// 開いたり閉じたり。
-//
-// 両ポーズを同じ高さで描くと、大の字は横に広く、棒立ちは細くなる。
-// 高さが変わらないまま幅だけが変わるので、そのまま「腕を開く / 閉じる」に見える。
-// 高さ基準にしているのは、円の当たり判定から縦にはみ出させないためでもある。
-//
-// 当たり判定はまだ変えていない（円のまま）。形も一緒に変えて周囲を押しのけるのは
-// 設計書 6 の内容で、Phase 2 で当たり判定を複合ボディにしてからでないと成立しない。
-const POSE_MORPH_FRAMES = 11;   // 切り替えにかけるフレーム数
-const POSE_CHANCE = 0.006;      // 静止中の1体が1回の走査で切り替わる確率
-const POSE_COOLDOWN = 1400;     // 同じ子が連続で動かないための間隔 (ms)
-const POSE_FLAP_FRAMES = 60;    // 落下中の開閉間隔。60フレーム = 約1秒ごとに切り替わる
-
-// 見た目のモード。index.html が window.DROP_DELTA_PLAIN を立ててから読み込むと、
-// スプライトを使わず色の丸で描く。物理・判定・難易度は完全に同一。
-const USE_SPRITES = !window.DROP_DELTA_PLAIN;
-const MODE_KEY = USE_SPRITES ? 'girls' : 'plain';
-
-// タイトル画面は両方に出す。名前が付いた以上、名乗る場所が要る
-const TITLE = USE_SPRITES ? 'ドロップデルタもん' : 'フルーツドロップス';
+const MODE_KEY = 'plain';        // 自己ベストの保存先に使う（前の名前の名残。変えると記録が消える）
+const TITLE = 'フルーツドロップス';
 
 // ---- グレード（シンプル版）------------------------------------------------
 //
 // 目標点に達するとクリア。盤面を一掃して次のグレードへ進む。
 // グレードが上がると目標点が伸び、キャンディーが速くなり、途中から色の種類が増える。
-const GRADE_MODE = !USE_SPRITES;
 
 // ---- 見た目のテーマ（背景と画面の文字色）------------------------------------
 //
 // 背景・文字・線の色をまとめて持つ。明るい背景では文字を暗くする必要があるため、
 // 背景だけでなく画面の文字色もテーマごとに持つ。
-// ドロップスは ?bg=名前 で切り替えられる。キャラ版は常に classic
+// ?bg=名前 で切り替えられる
 const THEMES = {
   classic: {
     bgTop: '#1b1f2e', bgBottom: '#101320', pattern: null,
@@ -220,16 +176,14 @@ const THEMES = {
     cardBg: 'rgba(255,255,255,0.62)', cardEdge: 'rgba(232,100,154,0.45)',
   },
 };
-const THEME_ID = GRADE_MODE ? (new URLSearchParams(location.search).get('bg') || 'sora') : 'classic';
+const THEME_ID = new URLSearchParams(location.search).get('bg') || 'sora';
 const UI = THEMES[THEME_ID] || THEMES.classic;
 
 // 文字は丸ゴシック。ドロップスだけ。読み込み前は system-ui で描かれる
-const FONT_FAMILY = GRADE_MODE
-  ? '"M PLUS Rounded 1c", system-ui, sans-serif'
-  : 'system-ui, sans-serif';
+const FONT_FAMILY = '"M PLUS Rounded 1c", system-ui, sans-serif';
 
 // canvas は描いた文字のためにフォントを取りに行かないので、使う字を先に読ませておく
-if (GRADE_MODE && document.fonts && document.fonts.load) {
+if (document.fonts && document.fonts.load) {
   const glyphs = 'おとがでるよんりょうはバーでちせつMキーオン・フしているあいだめちくなじ3つきえうごかすマウスゆびっぱなEscそとに（）' + 'スコアタップしてはじめる音が出ます上のバーでキーONOFF・フルーツドロップスえらんでクリック押しているあいだ飴が落ちてくる同じつながると消える'
     + 'はこまるぞこすりばちすなどけいベストグレードつぎおじゃまいろれんさ！'
     + 'あたらしいうつわがひらいためでゲームオーバースコアもういちどびょう'
@@ -381,8 +335,8 @@ const CONTAINERS = [
   })(),
 ];
 
-// 今の器。キャラ版は常に箱
-const container = () => CONTAINERS[GRADE_MODE ? state.stage : 0];
+// 今の器
+const container = () => CONTAINERS[state.stage];
 
 // 器ごとに独立したゲームとして遊ぶ。ある器で UNLOCK_GRADE をクリアすると次の器が解放される。
 // 解放状態と自己ベスト（器ごと）はブラウザに保存する
@@ -397,13 +351,13 @@ function loadUnlocked() {
 }
 
 // 自己ベストの保存先。ドロップスは器ごとに分ける
-const bestKey = i => 'dropdelta.best.' + MODE_KEY + (GRADE_MODE ? '.' + CONTAINERS[i].id : '');
+const bestKey = i => 'dropdelta.best.' + MODE_KEY + '.' + CONTAINERS[i].id;
 
 function readBest(i) {
   try {
     let v = localStorage.getItem(bestKey(i));
     // 器を導入する前の自己ベストは はこ のものとして引き継ぐ
-    if (v === null && GRADE_MODE && i === 0) v = localStorage.getItem('dropdelta.best.plain');
+    if (v === null && i === 0) v = localStorage.getItem('dropdelta.best.plain');
     return Number(v || 0);
   } catch (e) { return 0; }
 }
@@ -433,15 +387,8 @@ function gradeRelief(g) {
   return 1;
 }
 
-const sheet = new Image();
-let sheetReady = false;
-if (USE_SPRITES) {
-  sheet.onload = () => { sheetReady = true; };
-  sheet.src = './img/girls.png';
-}
-
 // Phase 1 の円は仮。当たり判定を絵の形（縦長／横広）に合わせるのは Phase 2。
-// Phase 2 で複合ボディに差し替える際、この R は「キャラの幅」の基準として引き継ぐ。
+// この R はフルーツの大きさの基準。
 const R = 31;               // 半径
 const REACH = 33;           // つながり判定の到達距離（重心間）
 const MATCH = 3;            // 消去に必要な数
@@ -452,7 +399,7 @@ const MAX_BODIES = 200;     // 盤面上限。負荷の安全弁であり難易�
 // ---- 物理パラメータ（設計書 4.2）----------------------------------------
 
 // ふわっと落とす。重力を弱め、空気抵抗を上げて終端速度を下げている。
-// 落下が速いと「物を投げ落としている」感触になり、キャラが物として扱われて見える
+// 落下が速いと「物を投げ落としている」感触になり、ふんわり落ちてこない
 const GRAVITY = 0.72;       // 盤面の高さを落ちきるのに約2.0秒（変更前は1.37秒）
 
 const PHYS = {
@@ -518,7 +465,7 @@ const CANDY_COUNT_EVERY = 6;      // 何波ごとに1回の投入数を増やす
 
 const candyInterval = wave => {
   const base = Math.max(CANDY_INTERVAL_MIN, CANDY_INTERVAL_MAX - wave * CANDY_INTERVAL_STEP);
-  return GRADE_MODE ? base * gradeCandyScale(state.grade) * gradeRelief(state.grade) : base;
+  return base * gradeCandyScale(state.grade) * gradeRelief(state.grade);
 };
 // 1回の投入数には上限を置く。目標点が上がるほど1グレードが長くなり、
 // 波が進んで投入数だけが際限なく増える。終盤だけ理不尽に重くなるのを防ぐ
@@ -528,7 +475,7 @@ const CANDY_COUNT_MAX_LATE = 3;
 const CANDY_COUNT_LATE_FROM = 7;   // このグレードから上限を上げる
 
 const candyCount = wave => {
-  const cap = (GRADE_MODE && state.grade >= CANDY_COUNT_LATE_FROM)
+  const cap = (state.grade >= CANDY_COUNT_LATE_FROM)
     ? CANDY_COUNT_MAX_LATE : CANDY_COUNT_MAX;
   return Math.min(cap, 1 + Math.floor(wave / CANDY_COUNT_EVERY));
 };
@@ -559,7 +506,7 @@ const mainCtx = canvas.getContext('2d');
 let ctx = mainCtx;          // ふだんは画面。飴の絵をとっておくときだけ一時的に差し替える（spriteFor）
 
 const state = {
-  queue: [],          // NEXT。先頭が今持っているキャラ
+  queue: [],          // NEXT。先頭が今構えているフルーツ
   pointerX: W / 2,
   lastDrop: 0,
   frame: 0,
@@ -571,7 +518,7 @@ const state = {
   overSince: 0,
   // 「タップして はじめる」の画面。ブラウザは操作があるまで音を出させないので、
   // 最初の1回を押してもらってからタイトルの曲と器の一覧を出す（ドロップスだけ）
-  splash: GRADE_MODE,
+  splash: true,
   leaving: null,       // ボタンを押して、画面が移るのを待っている { kind: 'splash' | 'start', at }
   musicDelay: 0,
   pinch: false,        // 山がラインに迫っている（BGM をピンチ版に）
@@ -588,7 +535,6 @@ const state = {
   nextCandyAt: 0,     // 次の投入時刻
   wantDropAt: 0,      // 保留中のクリック（0 なら無し）
   wantDropX: 0,
-  bubbles: [],        // 飛び散るセリフ
   pushEdge: 0,        // 盤面外へはみ出している向き（-1 左 / 0 内側 / 1 右）
   rawX: W / 2,        // クランプ前のポインタ位置
   locked: false,      // ポインタロック中か
@@ -611,7 +557,6 @@ const state = {
 };
 
 const removeQueue = [];
-if (!GRADE_MODE) state.best = readBest(0);
 
 // ---- 初期化 --------------------------------------------------------------
 
@@ -651,9 +596,8 @@ function buildWalls() {
 }
 
 
-// 今そのモード・グレードで使う色の一覧
+// 今のグレードで使うフルーツの一覧
 function palette() {
-  if (!GRADE_MODE) return TYPES;
   return DROPS.slice(0, gradeKinds(state.grade));
 }
 
@@ -662,17 +606,12 @@ function randomType() {
   return p[(Math.random() * p.length) | 0];
 }
 
-// ボディを作る。シンプル版は形が当たり判定そのもの
+// ボディを作る。形が当たり判定そのもの
 function makePieceBody(type, x, y) {
   const opts = Object.assign({}, PHYS, {
-    label: 'girl',
-    plugin: {
-      type: type.id, reach: REACH,
-      pose: 'x', from: 'x', morph: 1, poseAt: 0, flap: 0,
-    },
+    label: 'drop',
+    plugin: { type: type.id, reach: REACH },
   });
-
-  if (!GRADE_MODE) return Bodies.circle(x, y, R, opts);
 
   const verts = shapeVerts(type.shape, R);
   if (!verts) return Bodies.circle(x, y, circleR(R), opts);   // 丸も面積を揃える
@@ -691,13 +630,13 @@ function makePieceBody(type, x, y) {
 }
 
 function fillQueue() {
-  // 先頭が今持っているキャラ。残りが NEXT として見える分
+  // 先頭が今構えているフルーツ。残りが NEXT として見える分
   while (state.queue.length < 1 + NEXT_SHOWN) state.queue.push(randomType());
 }
 
 function reset() {
   Composite.clear(world, false);
-  state.stage = GRADE_MODE ? state.titleSel : 0;   // 壁を作る前に器を決める
+  state.stage = state.titleSel;   // 壁を作る前に器を決める
   state.stageBanner = 0;
   buildWalls();
 
@@ -721,7 +660,6 @@ function reset() {
   state.pinchSince = 0;
   state.gameOver = false;
   state.effects.length = 0;
-  state.bubbles.length = 0;
   state.wave = 0;
   state.wantDropAt = 0;
   state.nextCandyAt = performance.now() + CANDY_FIRST;
@@ -730,7 +668,7 @@ function reset() {
 
 // ---- ドロップ ------------------------------------------------------------
 
-function girls() {
+function drops() {
   return Composite.allBodies(world).filter(b => b.plugin && b.plugin.type);
 }
 
@@ -744,7 +682,7 @@ function pieces() {
 }
 
 function spawnBlocked(x) {
-  // 出現位置に前のキャラがまだ居るなら撃たせない（重なりによる吹き飛び防止）
+  // 出現位置に前のフルーツがまだ居るなら撃たせない（重なりによる吹き飛び防止）
   const region = { min: { x: x - R, y: SPAWN_Y - R }, max: { x: x + R, y: SPAWN_Y + R } };
   return Query.region(pieces(), region).length > 0;
 }
@@ -811,21 +749,15 @@ function leaveSplash() {
 function titleClick() {
   if (state.leaving) return;           // 移る途中の連打は無視
   if (state.splash) { leaveSplash(); return; }
-  if (GRADE_MODE) {
-    const r = titleRowAt(state.pointerY);
-    if (r > state.unlocked) { state.lockFlash = 40; Sound.deny(); return; }
-    if (r >= 0) state.titleSel = r;
-  }
+  const r = titleRowAt(state.pointerY);
+  if (r > state.unlocked) { state.lockFlash = 40; Sound.deny(); return; }
+  if (r >= 0) state.titleSel = r;
   beginLeave('start');
 }
 
 function requestDrop() {
   if (!state.started) { titleClick(); return; }
-  if (state.gameOver) {
-    if (GRADE_MODE) goTitle();
-    else { reset(); Sound.bgmStart(); Sound.showPanel(false); }
-    return;
-  }
+  if (state.gameOver) { goTitle(); return; }
   state.wantDropAt = performance.now();
   state.wantDropX = clamp(state.pointerX, dropLo(), dropHi());
   drop();
@@ -891,7 +823,7 @@ function spawnCandy() {
   const [olo, ohi] = container().opening;
   const x = clamp(olo + CANDY_R + 4 + Math.random() * (ohi - olo - CANDY_R * 2 - 8),
                   olo + CANDY_R + 2, ohi - CANDY_R - 2);
-  // 画面外の上から入れる。キャラの出現帯（SPAWN_Y ± R）に居座ると、その真下の x で
+  // 画面外の上から入れる。フルーツの出現帯（SPAWN_Y ± R）に居座ると、その真下の x で
   // プレイヤーが撃てなくなる
   Composite.add(world, makeCandyBody(x, -CANDY_R - 12));
 }
@@ -931,95 +863,10 @@ function updateCandy() {
   state.nextCandyAt = now + candyInterval(state.wave);
 }
 
-// ---- セリフ --------------------------------------------------------------
 
-function spawnBubble(x, y, id, big) {
-  if (!USE_SPRITES) return;   // 丸だけ版では喋らない。誰が喋っているのか分からない
-  if (state.bubbles.length >= BUBBLE_MAX) return;
-  const c = colorOf(id);
-  state.bubbles.push({
-    x, y,
-    text: c.line,
-    color: c.hair,
-    vx: (Math.random() - 0.5) * 0.9,
-    vy: -1.5 - Math.random() * 0.7,
-    rot: (Math.random() - 0.5) * 0.35,
-    size: big ? 19 : 14,
-    t: 0,
-  });
-}
 
-function updateBubbles() {
-  for (let i = state.bubbles.length - 1; i >= 0; i--) {
-    const b = state.bubbles[i];
-    b.x += b.vx;
-    b.y += b.vy;
-    b.vy *= 0.94;          // 浮き上がって減速する。ぽわぽわ
-    b.vx *= 0.97;
-    if (++b.t > BUBBLE_LIFE) state.bubbles.splice(i, 1);
-  }
-}
 
-function drawBubbles() {
-  for (const b of state.bubbles) {
-    const t = b.t / BUBBLE_LIFE;
-    // 出た瞬間だけ少し大きく、あとは徐々に消える
-    const pop = b.t < 6 ? 0.7 + (b.t / 6) * 0.45 : 1.15 - (b.t - 6) / BUBBLE_LIFE * 0.15;
-    ctx.save();
-    ctx.translate(b.x, b.y);
-    ctx.rotate(b.rot * (0.4 + t));
-    ctx.scale(pop, pop);
-    ctx.globalAlpha = t < 0.65 ? 1 : (1 - t) / 0.35;
-    ctx.font = 'bold ' + b.size + 'px ' + FONT_FAMILY;
-    ctx.textAlign = 'center';
-    ctx.lineWidth = 3.5;
-    ctx.strokeStyle = 'rgba(16,18,28,0.85)';
-    ctx.strokeText(b.text, 0, 0);
-    ctx.fillStyle = b.color;
-    ctx.fillText(b.text, 0, 0);
-    ctx.restore();
-  }
-  ctx.globalAlpha = 1;
-}
 
-// ---- ポーズ（開いたり閉じたり）------------------------------------------
-
-function updatePoses() {
-  const now = performance.now();
-  for (const b of girls()) {
-    const p = b.plugin;
-
-    // 切り替え中なら進める
-    if (p.morph < 1) {
-      p.morph = Math.min(1, p.morph + 1 / POSE_MORPH_FRAMES);
-      continue;
-    }
-
-    if (settled(b)) {
-      // たまにひとりごとを言う
-      if (Math.random() < BUBBLE_IDLE) {
-        spawnBubble(b.position.x, b.position.y - R * 0.6, p.type, false);
-      }
-      // 積まれて落ち着いた子は、たまに気まぐれに動く
-      if (now - p.poseAt < POSE_COOLDOWN) continue;
-      if (Math.random() >= POSE_CHANCE) continue;
-      togglePose(p, now);
-    } else {
-      // 落下中は等間隔でパタパタさせる。ランダムだと落ちている間に
-      // 一度も動かない子が出て、動く子と動かない子がまだらになる
-      if (++p.flap < POSE_FLAP_FRAMES) continue;
-      togglePose(p, now);
-    }
-  }
-}
-
-function togglePose(p, now) {
-  p.from = p.pose;
-  p.pose = p.pose === 'x' ? 'stand' : 'x';
-  p.morph = 0;
-  p.poseAt = now;
-  p.flap = 0;
-}
 
 // ---- つながり判定（設計書 5.1）-------------------------------------------
 
@@ -1063,7 +910,7 @@ function findGroups(list) {
 // 起点が既に MATCH 体以上の静止クラスタである以上、そこから同種でつながっている分は
 // 揺れていてもまとめて消す。
 function expandGroup(group) {
-  const all = girls();
+  const all = drops();
   const inGroup = new Set(group.map(b => b.id));
   const stack = group.slice();
 
@@ -1081,8 +928,8 @@ function expandGroup(group) {
   return group;
 }
 
-// 消去確定したキャラ群を起点に、隣接するキャンディーを層状に辿る。
-// 辿る対象はキャンディーのみ。間にキャラが挟まっていればそこで打ち切られる（設計書 3.2）
+// 消去確定したフルーツ群を起点に、隣接するおじゃまを層状に辿る。
+// 辿る対象はおじゃまのみ。間にフルーツが挟まっていればそこで打ち切られる（設計書 3.2）
 function collectCandy(clearedGirls, layers) {
   if (layers < 1) return [];
   const pool = candies();
@@ -1111,7 +958,7 @@ function scan() {
   const now = performance.now();
   if (now < state.recheckAt) return;
 
-  const list = girls().filter(settled);
+  const list = drops().filter(settled);
   if (list.length < MATCH) return;
 
   const groups = findGroups(list);
@@ -1134,9 +981,6 @@ function scan() {
       clearedGirls.push(b);
       // 消える瞬間は全員が大の字になる。途中で閉じかけていても揃える
       state.effects.push({ x: b.position.x, y: b.position.y, angle: b.angle, type: b.plugin.type, t: 0 });
-      if (Math.random() < BUBBLE_ON_CLEAR) {
-        spawnBubble(b.position.x, b.position.y - R * 0.6, b.plugin.type, true);
-      }
       cleared++;
     }
   }
@@ -1157,7 +1001,7 @@ function scan() {
   state.recheckAt = now + RECHECK_DELAY;
 
   // 目標点に届いたらグレードクリア
-  if (GRADE_MODE && !state.clearT && state.gradeScore >= gradeTarget(state.grade)) {
+  if (!state.clearT && state.gradeScore >= gradeTarget(state.grade)) {
     beginGradeClear();
   }
 }
@@ -1236,7 +1080,7 @@ function finishGradeClear() {
   state.overSince = 0;
 
   // この器で UNLOCK_GRADE をクリアしたら、次の器を解放する（器自体は変わらない）
-  if (GRADE_MODE && state.grade - 1 === UNLOCK_GRADE) unlockStage(state.stage + 1);
+  if (state.grade - 1 === UNLOCK_GRADE) unlockStage(state.stage + 1);
 }
 
 // ---- ゲームオーバー（設計書 7）------------------------------------------
@@ -1302,7 +1146,7 @@ function checkGameOver() {
 
 // ---- 描画 ----------------------------------------------------------------
 
-const ALL_TYPES = TYPES.concat(DROPS).concat([CANDY_TYPE]);
+const ALL_TYPES = DROPS.concat([CANDY_TYPE]);
 const colorOf = id => ALL_TYPES.find(t => t.id === id);
 
 // ドロップを描く。
@@ -1713,76 +1557,11 @@ function shade(hex, k) {
   return 'rgb(' + r + ',' + g + ',' + b + ')';
 }
 
-// 1枚分の描画。高さ基準で合わせる。
-// 幅基準にすると縦にはみ出して隣とめり込んで見える
-function blitPose(c, pose, r, alpha) {
-  if (alpha <= 0.01) return;
-  const [sx, sy, sw, sh] = c[pose];
-  const dh = r * 2 * SPRITE_FIT;
-  const dw = dh * (sw / sh);
-  ctx.globalAlpha = alpha;
-  ctx.drawImage(sheet, sx, sy, sw, sh, -dw / 2, -dh / 2, dw, dh);
+
+function drawPiece(x, y, angle, r, id, alpha, body) {
+  drawDrop(x, y, angle, r, id, alpha, body);
 }
 
-// morph: { from, pose, morph } を渡すと開閉の途中を描く。省略時は大の字
-// キャラ版とシンプル版の入口を1本にする。呼び出し側はどちらか意識しない
-function drawPiece(x, y, angle, r, id, alpha, p, body) {
-  if (GRADE_MODE) drawDrop(x, y, angle, r, id, alpha, body);
-  else drawGirl(x, y, angle, r, id, alpha, p);
-}
-
-function drawGirl(x, y, angle, r, id, alpha, p) {
-  const c = colorOf(id);
-  ctx.save();
-  ctx.translate(x, y);
-  ctx.rotate(angle * 0.3);   // 実角度の 0.3 倍に抑制（設計書 4.2）
-  ctx.globalAlpha = alpha;
-
-  if (sheetReady) {
-    const pose = p ? p.pose : 'x';
-    const t = p ? p.morph : 1;
-    if (t >= 1) {
-      blitPose(c, pose, r, alpha);
-    } else {
-      // 切り替え中はクロスフェード。絵が別物なので幅の補間ではつながらない
-      blitPose(c, p.from, r, alpha * (1 - t));
-      blitPose(c, pose, r, alpha * t);
-    }
-    ctx.restore();
-    return;
-  }
-
-  // 画像が読めるまでの代替表示
-  ctx.fillStyle = c.body;
-  ctx.beginPath();
-  ctx.arc(0, 0, r, 0, Math.PI * 2);
-  ctx.fill();
-
-  // 髪
-  ctx.fillStyle = c.hair;
-  ctx.beginPath();
-  ctx.arc(0, 0, r, Math.PI * 1.08, Math.PI * 1.92);
-  ctx.fill();
-
-  // 目
-  ctx.fillStyle = '#2b2f3c';
-  ctx.beginPath();
-  ctx.arc(-r * 0.3, r * 0.05, r * 0.11, 0, Math.PI * 2);
-  ctx.fill();
-  ctx.beginPath();
-  ctx.arc(r * 0.3, r * 0.05, r * 0.11, 0, Math.PI * 2);
-  ctx.fill();
-
-  // 口
-  ctx.strokeStyle = '#2b2f3c';
-  ctx.lineWidth = Math.max(1, r * 0.08);
-  ctx.lineCap = 'round';
-  ctx.beginPath();
-  ctx.arc(0, r * 0.18, r * 0.18, 0.15 * Math.PI, 0.85 * Math.PI);
-  ctx.stroke();
-
-  ctx.restore();
-}
 
 // お邪魔は飴ではなく「包み紙」。**つやを飴と揃えない。**
 // 紙はマットなので、鋭いハイライトを入れると中身の見えるキャンディに見えてしまい、
@@ -1920,38 +1699,15 @@ function drawContainerFront() {
 // 器が変わった直後の表示
 function drawStageBanner() {
   if (!state.stageBanner) return;
-  if (GRADE_MODE) {
-    const t = state.stageBanner / STAGE_BANNER_FRAMES;
-    const alpha = clamp(t > 0.8 ? (1 - t) / 0.2 : t < 0.2 ? t / 0.2 : 1, 0, 1);
-    const age = (STAGE_BANNER_FRAMES - state.stageBanner) * (1000 / 60);
-    const y = H / 2 + 96;   // グレードクリアの表示と重ならないよう下に出す
-    cuteText('あたらしい うつわ が ひらいた', W / 2, y, 16,
-      { colors: ['#43c4f0'], age, stagger: 16, alpha, weight: 700 });
-    cuteText(CONTAINERS[state.bannerStage].name, W / 2, y + 42, 32,
-      { colors: CANDY_INKS, age: age - 300, stagger: 60, bounce: true, alpha, stripes: true });
-    return;
-  }
   const t = state.stageBanner / STAGE_BANNER_FRAMES;
-  const a = t > 0.8 ? (1 - t) / 0.2 : t < 0.2 ? t / 0.2 : 1;
-
-  ctx.save();
-  ctx.globalAlpha = clamp(a, 0, 1);
-  ctx.textAlign = 'center';
-  ctx.lineWidth = 7;
-  ctx.strokeStyle = 'rgba(14,16,26,0.9)';
-
-  const name = CONTAINERS[state.bannerStage].name;
-  const y = H / 2 + 90;   // グレードクリアの表示と重ならないよう下に出す
-  ctx.font = 'bold 16px ' + FONT_FAMILY;
-  ctx.strokeText('あたらしい うつわ が ひらいた', W / 2, y);
-  ctx.fillStyle = UI.soft;
-  ctx.fillText('あたらしい うつわ が ひらいた', W / 2, y);
-
-  ctx.font = 'bold 28px ' + FONT_FAMILY;
-  ctx.strokeText(name, W / 2, y + 36);
-  ctx.fillStyle = '#ffe6a3';
-  ctx.fillText(name, W / 2, y + 36);
-  ctx.restore();
+  const alpha = clamp(t > 0.8 ? (1 - t) / 0.2 : t < 0.2 ? t / 0.2 : 1, 0, 1);
+  const age = (STAGE_BANNER_FRAMES - state.stageBanner) * (1000 / 60);
+  const y = H / 2 + 96;   // グレードクリアの表示と重ならないよう下に出す
+  cuteText('あたらしい うつわ が ひらいた', W / 2, y, 16,
+    { colors: ['#43c4f0'], age, stagger: 16, alpha, weight: 700 });
+  cuteText(CONTAINERS[state.bannerStage].name, W / 2, y + 42, 32,
+    { colors: CANDY_INKS, age: age - 300, stagger: 60, bounce: true, alpha, stripes: true });
+  return;
 }
 
 // 背景の柄は毎フレーム描かず、一度だけ別の canvas に描いておいて貼る
@@ -2019,8 +1775,8 @@ function draw() {
 
   if (!state.started) { drawTitle(); drawTrail(); return; }
 
-  if (GRADE_MODE) drawContainerBack();
-  if (GRADE_MODE) drawHudCards();
+  drawContainerBack();
+  drawHudCards();
 
   // ゲームオーバーライン。器の内側の幅だけ引く
   const [llo, lhi] = container().line;
@@ -2044,7 +1800,7 @@ function draw() {
     ctx.fillRect(state.pushEdge < 0 ? 0 : W - 46, 0, 46, H);
   }
 
-  // 落下ガイド + 待機キャラ
+  // 落下ガイド + 構えているフルーツ
   if (!state.gameOver) {
     const x = clamp(state.pointerX, dropLo(), dropHi());
     ctx.strokeStyle = UI.guide;
@@ -2060,11 +1816,11 @@ function draw() {
     drawCandy(b.position.x, b.position.y, b.angle, CANDY_R, 1, b);
   }
 
-  for (const b of girls()) {
-    drawPiece(b.position.x, b.position.y, b.angle, R, b.plugin.type, 1, b.plugin, b);
+  for (const b of drops()) {
+    drawPiece(b.position.x, b.position.y, b.angle, R, b.plugin.type, 1, b);
   }
 
-  // 消滅エフェクト。キャラは大の字（drawGirl の既定ポーズ）で消える。
+  // 消滅エフェクト。
   // 線形に薄くすると出た瞬間から半透明に見えるため、前半は濃いまま保って
   // 後半で一気に抜く
   for (const e of state.effects) {
@@ -2074,8 +1830,7 @@ function draw() {
     else drawPiece(e.x, e.y, e.angle || 0, R * (1 + t * 0.9), e.type, a);
   }
 
-  if (GRADE_MODE) drawContainerFront();
-  drawBubbles();
+  drawContainerFront();
 
   drawHud();
   drawTrail();
@@ -2230,61 +1985,6 @@ function drawChainCute() {
   }
 }
 
-function drawChain() {
-  if (GRADE_MODE) { drawChainCute(); return; }
-  if (state.chain < 2) return;
-  const age = performance.now() - state.lastClear;
-  if (age > CHAIN_WINDOW) return;
-
-  const n = state.chain;
-  const tier = chainTier(n);
-  const t = age / CHAIN_WINDOW;
-
-  // 出た瞬間に弾んで、最後に消える
-  const pop = age < 130 ? 0.55 + (age / 130) * 0.55 : 1.1 - (age - 130) / CHAIN_WINDOW * 0.1;
-  const alpha = t < 0.7 ? 1 : (1 - t) / 0.3;
-
-  // 高連鎖ほど揺れる
-  const shake = n >= 6 ? (Math.random() - 0.5) * (n - 5) * 1.6 : 0;
-
-  ctx.save();
-  ctx.globalAlpha = alpha;
-  ctx.translate(W / 2 + shake, H / 2 - 40 + shake * 0.5);
-  ctx.scale(pop, pop);
-  ctx.textAlign = 'center';
-  ctx.font = 'bold ' + tier.size + 'px ' + FONT_FAMILY;
-
-  const text = n + ' CHAIN' + tier.suffix;
-
-  // 5連鎖以上は発光
-  if (n >= 5) {
-    ctx.shadowColor = tier.fill;
-    ctx.shadowBlur = 18 + (n - 4) * 6;
-  }
-  // 4連鎖以上は縁取りを厚くして重量感を出す
-  ctx.lineWidth = n >= 4 ? 7 : 4;
-  ctx.strokeStyle = 'rgba(14,16,26,0.9)';
-  ctx.strokeText(text, 0, 0);
-
-  ctx.shadowBlur = 0;
-  ctx.fillStyle = tier.fill;
-  ctx.fillText(text, 0, 0);
-
-  // 7連鎖以上はきらめきを散らす
-  if (n >= 7) {
-    ctx.fillStyle = '#fff6c2';
-    for (let i = 0; i < 8; i++) {
-      const a = (i / 8) * Math.PI * 2 + age / 200;
-      const rr = tier.size * (1.1 + 0.25 * Math.sin(age / 90 + i));
-      const s = 2.2 + Math.sin(age / 60 + i) * 1.2;
-      ctx.beginPath();
-      ctx.arc(Math.cos(a) * rr * 1.7, Math.sin(a) * rr * 0.55, Math.max(0.5, s), 0, Math.PI * 2);
-      ctx.fill();
-    }
-  }
-  ctx.restore();
-  ctx.globalAlpha = 1;
-}
 
 // タイトル画面。3人が並んで開閉し続ける
 // フルーツドロップスのロゴ。
@@ -2437,86 +2137,39 @@ function drawTitle() {
   ctx.save();
   ctx.textAlign = 'center';
 
-  // タイトル。ゆっくり上下に揺れる
-  if (GRADE_MODE) {
-    drawLogo(t);
-  } else {
-    const bob = Math.sin(t / 34) * 4;
-    const ty0 = 210;
-    ctx.font = 'bold 44px ' + FONT_FAMILY;
-    ctx.lineWidth = 8;
-    ctx.strokeStyle = 'rgba(14,16,26,0.9)';
-    ctx.strokeText(TITLE, W / 2, ty0 + bob);
-    const g = ctx.createLinearGradient(0, ty0 - 30, 0, ty0 + 15);
-    g.addColorStop(0, '#ffe6a3');
-    g.addColorStop(1, '#f492b8');
-    ctx.fillStyle = g;
-    ctx.fillText(TITLE, W / 2, ty0 + bob);
-  }
+  drawLogo(t);
 
-  if (GRADE_MODE) {
-    // 飴を1列に並べてゆっくり回す。形の違いがひと目で分かるように全色出す
-    DROPS.forEach((ty, i) => {
-      const x = W / 2 + (i - (DROPS.length - 1) / 2) * 58;
-      const y = 222 + Math.sin(t / 28 + i * 0.9) * 5;
-      drawDrop(x, y, t / 120 + i, 19, ty.id, 1);
-    });
-    if (state.splash) {
-      drawSplash(t);
-      ctx.restore();
-      return;
-    }
-    drawStageList();
-    drawLeaveRow();
-  } else {
-    // 3人を並べる。落下中と同じ間隔で開閉させる
-    const pose = Math.floor(t / POSE_FLAP_FRAMES) % 2 ? 'stand' : 'x';
-    const prev = pose === 'x' ? 'stand' : 'x';
-    const m = clamp((t % POSE_FLAP_FRAMES) / POSE_MORPH_FRAMES, 0, 1);
-    TYPES.forEach((ty, i) => {
-      const x = W / 2 + (i - 1) * 116;
-      const y = 380 + Math.sin(t / 30 + i * 1.1) * 7;
-      drawGirl(x, y, 0, 44, ty.id, 1, { pose, from: prev, morph: m });
-    });
-
-    // セリフを順番に見せる
-    TYPES.forEach((ty, i) => {
-      const phase = (t / 90) % 3;
-      if (Math.floor(phase) !== i) return;
-      ctx.globalAlpha = 0.9;
-      ctx.font = 'bold 17px ' + FONT_FAMILY;
-      ctx.lineWidth = 3.5;
-      ctx.strokeStyle = 'rgba(16,18,28,0.85)';
-      ctx.strokeText(ty.line, W / 2 + (i - 1) * 116, 316);
-      ctx.fillStyle = ty.hair;
-      ctx.fillText(ty.line, W / 2 + (i - 1) * 116, 316);
-      ctx.globalAlpha = 1;
-    });
+  // フルーツを1列に並べてゆっくり回す。形の違いがひと目で分かるように全色出す
+  DROPS.forEach((ty, i) => {
+    const x = W / 2 + (i - (DROPS.length - 1) / 2) * 58;
+    const y = 222 + Math.sin(t / 28 + i * 0.9) * 5;
+    drawDrop(x, y, t / 120 + i, 19, ty.id, 1);
+  });
+  if (state.splash) {
+    drawSplash(t);
+    ctx.restore();
+    return;
   }
+  drawStageList();
+  drawLeaveRow();
 
   // 点滅する案内
   ctx.globalAlpha = 0.55 + Math.sin(t / 16) * 0.45;
   ctx.fillStyle = UI.ink;
   ctx.font = 'bold 18px ' + FONT_FAMILY;
-  ctx.fillText(GRADE_MODE ? 'えらんで クリック' : 'クリックでスタート', W / 2, GRADE_MODE ? 596 : 530);
+  ctx.fillText('えらんで クリック', W / 2, 596);
   ctx.globalAlpha = 1;
 
   // 操作を最初に言う。ルールや進行はゲーム中に画面へ出るが、
   // 「どう遊ぶか」は最初に伝えないと何も始まらない
-  const base = GRADE_MODE ? 632 : 572;
+  const base = 632;
   ctx.fillStyle = UI.mid;
   ctx.font = 'bold 13px ' + FONT_FAMILY;
-  ctx.fillText(GRADE_MODE ? 'おしている あいだ フルーツが おちてくるよ'
-                          : '押しているあいだ 女の子が落ちてくる', W / 2, base);
+  ctx.fillText('おしている あいだ フルーツが おちてくるよ', W / 2, base);
 
   ctx.fillStyle = UI.sub;
   ctx.font = '12px ' + FONT_FAMILY;
-  ctx.fillText(GRADE_MODE ? 'おなじ フルーツが 3つ つながると きえるよ'
-                          : '同じ子が3人つながると消える', W / 2, base + 22);
-
-  if (!GRADE_MODE && state.best > 0) {   // ドロップスは器ごとの段に出している
-    ctx.fillText('BEST ' + state.best, W / 2, base + 46);
-  }
+  ctx.fillText('おなじ フルーツが 3つ つながると きえるよ', W / 2, base + 22);
 
   ctx.restore();
 }
@@ -2549,42 +2202,6 @@ function drawGradeClearCute() {
   }
 }
 
-// グレードクリアの表示
-function drawGradeClear() {
-  if (GRADE_MODE) { drawGradeClearCute(); return; }
-  const t = 1 - state.clearT / GRADE_CLEAR_HOLD;
-  const pop = t < 0.18 ? t / 0.18 : 1;
-
-  ctx.save();
-  ctx.globalAlpha = state.clearT < 24 ? state.clearT / 24 : 1;
-  ctx.translate(W / 2, H / 2 - 30);
-  ctx.scale(0.6 + pop * 0.4, 0.6 + pop * 0.4);
-  ctx.textAlign = 'center';
-
-  ctx.font = 'bold 46px ' + FONT_FAMILY;
-  ctx.lineWidth = 8;
-  ctx.strokeStyle = 'rgba(14,16,26,0.9)';
-  ctx.strokeText('GRADE ' + state.grade, 0, 0);
-  ctx.fillStyle = '#ffe6a3';
-  ctx.fillText('GRADE ' + state.grade, 0, 0);
-
-  ctx.font = 'bold 30px ' + FONT_FAMILY;
-  ctx.strokeText('CLEAR!', 0, 44);
-  ctx.fillStyle = '#5ec46b';
-  ctx.fillText('CLEAR!', 0, 44);
-
-  // 伝えるのは次のグレードで変わることだけ。仕様の説明は出さない
-  const nextKinds = gradeKinds(state.grade + 1);
-  if (nextKinds > gradeKinds(state.grade)) {
-    const line = 'あたらしい フルーツ が でてくる';
-    ctx.font = 'bold 17px ' + FONT_FAMILY;
-    ctx.fillStyle = UI.ink;
-    ctx.strokeText(line, 0, 88);
-    ctx.fillText(line, 0, 88);
-  }
-  ctx.restore();
-  ctx.globalAlpha = 1;
-}
 
 // ---- タイトルの器の一覧 -------------------------------------------------
 
@@ -2674,56 +2291,6 @@ function drawStageList() {
   });
 }
 
-// キャラ版の上の表示（今まで通り）
-function drawHudPlain() {
-  ctx.fillStyle = UI.ink;
-  ctx.font = 'bold 26px ' + FONT_FAMILY;
-  ctx.textAlign = 'left';
-  ctx.fillText(String(state.score), 16, 38);
-
-  ctx.fillStyle = UI.sub;
-  ctx.font = '12px ' + FONT_FAMILY;
-  ctx.fillText((GRADE_MODE ? 'ベスト ' : 'BEST ') + state.best, 16, 56);
-
-  // NEXT。近い手ほど大きく・濃く描き、順番が一目で分かるようにする。
-  // 待機キャラの帯（SPAWN_Y ± R = 39〜101）より上に置く。重なると手前のキャラが読めない
-  // 直近の手をラベル寄り（左）に置く。左から右へ読む順序と手番の順序を一致させる
-  for (let i = 1; i <= NEXT_SHOWN; i++) {
-    const k = i - 1;
-    const x = W - 28 - (NEXT_SHOWN - 1 - k) * 36;
-    drawPiece(x, 22, 0, 14 - k * 2.2, state.queue[i].id, 0.95 - k * 0.22);
-  }
-  // ラベルはアイコンの下に置く。左に置くとフラスコの首のガラスと重なる
-  ctx.textAlign = 'right';
-  ctx.fillStyle = UI.sub;
-  ctx.font = '11px ' + FONT_FAMILY;
-  ctx.fillText(GRADE_MODE ? 'つぎ' : 'NEXT', W - 16, 50);
-
-  // キャンディー予告。残り時間と来る数（設計書 7「予告なしは理不尽」）
-  if (!state.gameOver) {
-    const left = Math.max(0, state.nextCandyAt - performance.now());
-    const span = candyInterval(state.wave);
-    const n = candyCount(state.wave);
-    const imminent = left < 3000;
-
-    // グレード版は左にグレードメーターが入るので、キャンディー予告は右へ逃がす
-    const bw = 96, bh = 4;
-    const bx = GRADE_MODE ? W - 16 - bw : 16;
-
-    ctx.textAlign = GRADE_MODE ? 'right' : 'left';
-    ctx.fillStyle = imminent ? '#c9a3f0' : UI.sub;
-    ctx.font = '12px ' + FONT_FAMILY;
-    ctx.fillText((GRADE_MODE ? 'おじゃま ×' : 'CANDY x') + n + '  ' + (left / 1000).toFixed(1) + 's',
-                 GRADE_MODE ? W - 16 : 16, 82);
-
-    // 残り時間バー
-    ctx.fillStyle = UI.track;
-    ctx.fillRect(bx, 90, bw, bh);
-    ctx.fillStyle = imminent ? '#b6a7e0' : UI.trackFill;
-    ctx.fillRect(bx, 90, bw * clamp(1 - left / span, 0, 1), bh);
-  }
-
-}
 
 // ---- ドロップスの上の表示 ------------------------------------------------
 //
@@ -3009,11 +2576,10 @@ function drawHudCute() {
 
 function drawHud() {
   ctx.globalAlpha = 1;
-  if (GRADE_MODE) drawHudCute();
-  else drawHudPlain();
+  drawHudCute();
 
   // 案内はゲームオーバーラインより上に出す。
-  // ここが埋まったらゲームオーバーなので、定義上キャラと重なることがない。
+  // ここが埋まったらゲームオーバーなので、定義上フルーツと重なることがない。
   // 画面下に置くと積み上がった山に文字が被って読めなくなる
   if (!state.gameOver) {
     ctx.textAlign = 'center';
@@ -3021,7 +2587,7 @@ function drawHud() {
 
     if (!state.dropped) {
       ctx.font = '13px ' + FONT_FAMILY;
-      ctx.fillText(GRADE_MODE ? 'うごかす: マウス / ゆび　　おとす: おしっぱなし' : '動かす: マウス / 指　　落とす: 押しっぱなし', W / 2, GRADE_MODE ? 132 : 116);
+      ctx.fillText('うごかす: マウス / ゆび　　おとす: おしっぱなし', W / 2, 132);
     }
 
     // ポインタが固定されていないと、カーソルがブラウザの枠外へ出てしまい、
@@ -3030,40 +2596,29 @@ function drawHud() {
     if (!state.locked && state.frame < 600) {
       ctx.globalAlpha = clamp((600 - state.frame) / 90, 0, 1);
       ctx.font = '12px ' + FONT_FAMILY;
-      ctx.fillText(GRADE_MODE ? 'Esc で マウスが そとに だせる' : 'Esc でマウスが外に出せる', W / 2, GRADE_MODE ? 172 : 136);
+      ctx.fillText('Esc で マウスが そとに だせる', W / 2, 172);
       ctx.globalAlpha = 1;
     }
   }
 
-  drawChain();
-  if (GRADE_MODE) drawStageBanner();
-  if (GRADE_MODE && state.clearT > 0) drawGradeClear();
+  drawChainCute();
+  drawStageBanner();
+  if (state.clearT > 0) drawGradeClearCute();
 
   if (state.gameOver) {
     ctx.globalAlpha = 1;
     ctx.fillStyle = UI.overlay;
     ctx.fillRect(0, 0, W, H);
     ctx.textAlign = 'center';
-    if (GRADE_MODE) {
-      // ゲームオーバーも他の文字と同じ描き方。色は少し落ち着かせる
-      const age = performance.now() - state.overAt;
-      cuteText('ゲームオーバー', W / 2, H / 2 - 30, 38,
-        { colors: ['#a787fa', '#ff6fa5'], age, stagger: 50, tilt: true, stripes: true });
-      cuteText('スコア ' + state.score, W / 2, H / 2 + 18, 22,
-        { colors: ['#43c4f0'], age: age - 400, stagger: 30, weight: 700, stripes: true });
-      ctx.fillStyle = UI.sub;
-      ctx.font = '700 14px ' + FONT_FAMILY;
-      ctx.fillText('おして はなすと もどる', W / 2, H / 2 + 64);
-      return;
-    }
-    ctx.fillStyle = UI.ink;
-    ctx.font = 'bold 40px ' + FONT_FAMILY;
-    ctx.fillText('GAME OVER', W / 2, H / 2 - 20);
-    ctx.font = '20px ' + FONT_FAMILY;
-    ctx.fillText('SCORE ' + state.score, W / 2, H / 2 + 20);
+    // ゲームオーバーも他の文字と同じ描き方。色は少し落ち着かせる
+    const age = performance.now() - state.overAt;
+    cuteText('ゲームオーバー', W / 2, H / 2 - 30, 38,
+      { colors: ['#a787fa', '#ff6fa5'], age, stagger: 50, tilt: true, stripes: true });
+    cuteText('スコア ' + state.score, W / 2, H / 2 + 18, 22,
+      { colors: ['#43c4f0'], age: age - 400, stagger: 30, weight: 700, stripes: true });
     ctx.fillStyle = UI.sub;
-    ctx.font = '14px ' + FONT_FAMILY;
-    ctx.fillText('クリック / タップでもう一度', W / 2, H / 2 + 60);
+    ctx.font = '700 14px ' + FONT_FAMILY;
+    ctx.fillText('おして はなすと もどる', W / 2, H / 2 + 64);
   }
 }
 
@@ -3087,8 +2642,6 @@ function step() {
     // クリア演出中は入力もお邪魔も止める
     if (state.clearT > 0) {
       if (--state.clearT === 0) finishGradeClear();
-      updatePoses();
-      updateBubbles();
       for (let i = state.effects.length - 1; i >= 0; i--) {
         if (++state.effects[i].t > EFFECT_LIFE) state.effects.splice(i, 1);
       }
@@ -3098,8 +2651,6 @@ function step() {
     updateAutoFire();
     updatePendingDrop();
     updateCandy();
-    updatePoses();
-    updateBubbles();
 
     if (state.frame % SCAN_INTERVAL === 0) {
       scan();
@@ -3208,7 +2759,7 @@ window.addEventListener('pointermove', e => {
 
 // タイトルで、指している器を選ぶ（未解放の器は選ばない）
 function titleHover() {
-  if (state.started || !GRADE_MODE || state.splash || state.leaving) return;
+  if (state.started || state.splash || state.leaving) return;
   const r = titleRowAt(state.pointerY);
   if (r >= 0 && r <= state.unlocked && r !== state.titleSel) { state.titleSel = r; Sound.hover(); }
 }
@@ -3254,11 +2805,11 @@ window.addEventListener('keydown', e => {
   if (e.code === 'KeyM') { Sound.toggleMute(); return; }
   // タイトルでは上下キーで器を選び、スペース / Enter で始める
   if (!state.started && state.leaving) { e.preventDefault(); return; }
-  if (!state.started && GRADE_MODE && state.splash) {
+  if (!state.started && state.splash) {
     if (e.code === 'Space' || e.code === 'Enter') { e.preventDefault(); leaveSplash(); }
     return;
   }
-  if (!state.started && GRADE_MODE) {
+  if (!state.started) {
     const before = state.titleSel;
     if (e.code === 'ArrowUp') state.titleSel = Math.max(0, state.titleSel - 1);
     if (e.code === 'ArrowDown') state.titleSel = Math.min(state.unlocked, state.titleSel + 1);
