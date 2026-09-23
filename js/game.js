@@ -2065,8 +2065,8 @@ function drawLeaveRow() {
 
 // ---- マウスの星のキラキラ（パソコンだけ） ---------------------------------------
 //
-// カーソルは消してある（canvas の cursor: none）ので、パソコンのマウスだとどこを指しているか分かりにくい。
-//   タイトル・ゲームオーバー：マウスの位置に星のカーソル。動かすと星のかけらがこぼれる
+// マウスの通ったあとに星をこぼす（本物のカーソルはそのまま出す）。
+//   タイトル・ゲームオーバー：マウスを動かすと星のかけらがこぼれる
 //   遊んでいる間：構えている飴からキラキラがこぼれる（飴そのものが目印なので、カーソルは出さない）
 // タッチでは出さない（指の下なので見えないし、要らない）
 const TRAIL_LIFE = 46;
@@ -2118,16 +2118,6 @@ function drawTrail() {
     ctx.globalAlpha = 1 - k * k;
     sparkle(p.x, p.y, p.s * (1 - k * 0.6), p.c);
   }
-  ctx.restore();
-  // 星のカーソル（遊んでいる間は出さない）
-  if (!state.mouse) return;
-  const src = trailSource();
-  if (src.playing) return;
-  const tw = 1 + Math.sin(performance.now() / 180) * 0.12;
-  ctx.save();
-  ctx.globalAlpha = 0.95;
-  sparkle(src.x, src.y, 5.2 * tw, '#ff8fc0');
-  sparkle(src.x, src.y, 2.6 * tw, '#ffffff');
   ctx.restore();
 }
 
